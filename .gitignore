@@ -1,0 +1,61 @@
+Build outputs
+
+build/
+build-/
+out/
+cmake-build-/
+
+Compiled binaries
+
+*.exe
+*.dll
+*.so
+*.dylib
+*.obj
+*.o
+*.a
+*.lib
+*.pdb
+*.ilk
+*.pch
+*.idb
+
+CMake generated files
+
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+
+Visual Studio
+
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+ipch/
+
+IDE and editor files
+
+.idea/
+.vscode/
+
+System files
+
+.DS_Store
+Thumbs.db
+desktop.ini
+
+Logs and temporary files
+
+*.log
+*.tmp
+*.bak
+
+Test artifacts
+
+Testing/
