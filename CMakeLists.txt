@@ -12,3 +12,5 @@ add_executable(mrowisko
 add_executable(ant
     src/ant.cpp
 )
+
+add_dependencies(mrowisko ant)
