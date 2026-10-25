@@ -40,13 +40,14 @@ std::string ant_names[] = {
 };
 
 enum class Ant_status {
-    dead = 0,
-    live = 1,
-    idle = 2
+    ANT_BORN = 0,
+    ANT_DEAD = 1,
+    FOOD_FOUND = 2,
 };
 
+
 struct Ant {
-    Ant_status ant_status = Ant_status::live;
+    Ant_status ant_status = Ant_status::ANT_BORN;
     std::string ant_id;
     std::string ant_name;
     int ant_capacity = 10;
@@ -76,6 +77,9 @@ int ant_foraging(std::mt19937& gen) {
     return 0; // nie znaleziono pozywienia
 }
 
+
+
+
 int main(int argc, char* argv[]) {
     std::random_device rd;
     std::mt19937 gen(rd());
@@ -90,6 +94,7 @@ int main(int argc, char* argv[]) {
 
     cout << "Mrowka nr " << ant.ant_id << ", " << ant.ant_name << ", rodzi sie!" << '\n';
 
+    //poszukiwanie jedzenia az do smierci
     while (ant.ant_lifetime > 0) {
         int found = ant_foraging(gen);
 
@@ -100,6 +105,6 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    ant.ant_status = Ant_status::dead;
+    ant.ant_status = Ant_status::ANT_DEAD;
     return 0;
 }
