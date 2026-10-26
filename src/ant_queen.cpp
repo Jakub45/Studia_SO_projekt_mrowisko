@@ -1,4 +1,3 @@
-#include <windows.h>
 #include <iostream>
 #include <string>
 
@@ -11,8 +10,3 @@ struct Ant_Queen {
     Queen_status queen_status = Queen_status::QUEEN_BORN;
     int queen_lifetime;
 };
-
-int main() {
-
-	return 0;
-}

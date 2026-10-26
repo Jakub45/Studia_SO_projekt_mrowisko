@@ -1,6 +1,12 @@
-#include <windows.h>
 #include <iostream>
 #include <string>
+#include <vector>
+#include <cerrno>
+#include <cstring>
+
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 enum class status {
     ANT_BORN = 0,
@@ -8,94 +14,121 @@ enum class status {
     FOOD_FOUND = 2,
 };
 
-
 int main()
 {
-    HANDLE readPipe, writePipe;
-    SECURITY_ATTRIBUTES sa;
-    sa.nLength = sizeof(sa);
-    sa.lpSecurityDescriptor = NULL;
-    sa.bInheritHandle = TRUE;
-    if (!CreatePipe(&readPipe, &writePipe, &sa, 0))
+    int pipeFd[2];
+
+    // Utworzenie potoku do komunikacji z procesami mrowek
+    if (pipe(pipeFd) == -1) {
+        std::cerr << "Blad pipe(): " << std::strerror(errno) << '\n';
         return 1;
-    SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
-    PROCESS_INFORMATION processes[10];
-    int processCount = 0;
-
-
-
-    for (int i = 1; i <= 10; i++)
-    {
-        STARTUPINFOW si;
-        PROCESS_INFORMATION pi;
-        ZeroMemory(&si, sizeof(si));
-        ZeroMemory(&pi, sizeof(pi));
-        si.cb = sizeof(si);
-        si.dwFlags = STARTF_USESTDHANDLES;
-        si.hStdOutput = writePipe;
-        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-
-        wchar_t command[50];
-        swprintf_s(command, 50, L"ant.exe %d", i);
-
-        if (CreateProcessW(NULL, command, NULL, NULL,
-            TRUE, 0, NULL, NULL, &si, &pi))
-        {
-            processes[processCount] = pi;
-            processCount++;
-
-            CloseHandle(pi.hThread);
-        }
     }
 
-    CloseHandle(writePipe);
+    std::vector<pid_t> processes;
+
+    // Uruchomienie 10 procesow mrowek
+    for (int i = 1; i <= 10; ++i) {
+        pid_t pid = fork();
+
+        if (pid == -1) {
+            std::cerr << "Blad fork(): " << std::strerror(errno) << '\n';
+            continue;
+        }
+
+        if (pid == 0) {
+            // Proces potomny
+            close(pipeFd[0]);
+            // Przekierowanie stdout mrowki do potoku
+            if (dup2(pipeFd[1], STDOUT_FILENO) == -1) {
+                std::cerr << "Blad dup2(): " << std::strerror(errno) << '\n';
+                _exit(1);
+            }
+            close(pipeFd[1]);
+            // Przygotowanie argumentu z numerem mrowki
+            std::string antId = std::to_string(i);
+            // Uruchomienie programu ant
+            execl("./ant", "ant", antId.c_str(),
+                static_cast<char*>(nullptr));
+            // Ta linia wykona sie tylko, jesli execl() sie nie powiedzie
+            std::cerr << "Nie mozna uruchomic ./ant: "
+                << std::strerror(errno) << '\n';
+            _exit(127);
+        }
+
+        // Proces macierzysty zapamietuje PID potomka
+        processes.push_back(pid);
+    }
+
+    // Proces macierzysty nie bedzie juz pisal do potoku
+    close(pipeFd[1]);
 
     char buffer[256];
-    DWORD bytesRead;
     std::string pending;
 
-    while (ReadFile(readPipe, buffer, sizeof(buffer) - 1,
-        &bytesRead, NULL) && bytesRead > 0)
-    {
-        buffer[bytesRead] = '\0';
-        pending += buffer;
+    while (true) {
+        ssize_t bytesRead = read(pipeFd[0], buffer, sizeof(buffer));
 
-        size_t pos;
+        if (bytesRead > 0) {
+            pending.append(buffer, static_cast<std::size_t>(bytesRead));
 
-        while ((pos = pending.find('\n')) != std::string::npos)
-        {
-            std::string message = pending.substr(0, pos);
-            pending.erase(0, pos + 1);
+            std::size_t pos;
 
-            if (message.find("FOOD_FOUND ") == 0)
-            {
-                std::cout << message.substr(11)
-                    << " znalazl jedzenie!" << std::endl;
+            while ((pos = pending.find('\n')) != std::string::npos) {
+                std::string message = pending.substr(0, pos);
+                pending.erase(0, pos + 1);
+
+                if (message.find("FOOD_FOUND ") == 0) {
+                    std::cout << message.substr(11)
+                        << " znalazl jedzenie!" << std::endl;
+                }
+                else if (message.find("ANT_DEAD ") == 0) {
+                    std::cout << message.substr(9)
+                        << " umarl!" << std::endl;
+                }
+                else {
+                    std::cout << message << std::endl;
+                }
             }
-            else if (message.find("ANT_DEAD ") == 0)
-            {
-                std::cout << message.substr(9)
-                    << " umarl!" << std::endl;
-            }
-            else
-            {
-                std::cout << message << std::endl;
-            }
+
+            continue;
         }
+
+        if (bytesRead == 0) {
+            // Wszystkie konce zapisujace potoku zostaly zamkniete
+            break;
+        }
+
+        if (errno == EINTR) {
+            continue;
+        }
+
+        std::cerr << "Blad read(): " << std::strerror(errno) << '\n';
+        break;
     }
 
-    CloseHandle(readPipe);
+    // Obsluga ewentualnego ostatniego komunikatu bez znaku nowej linii
+    if (!pending.empty()) {
+        std::cout << pending << std::endl;
+    }
 
-    for (int i = 0; i < processCount; i++)
-    {
-        WaitForSingleObject(processes[i].hProcess, INFINITE);
-        CloseHandle(processes[i].hProcess);
+    close(pipeFd[0]);
+
+    // Oczekiwanie na zakonczenie wszystkich uruchomionych procesow
+    for (pid_t pid : processes) {
+        int childStatus;
+
+        while (waitpid(pid, &childStatus, 0) == -1) {
+            if (errno == EINTR) {
+                continue;
+            }
+
+            std::cerr << "Blad waitpid(): "
+                << std::strerror(errno) << '\n';
+            break;
+        }
     }
 
     std::cout << "Wszystkie mrowki zakonczyly dzialanie.\n";
-
-    std::cin.get();
 
     return 0;
 }
