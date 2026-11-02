@@ -1,12 +1,14 @@
-#include <ncurses.h>
+#include <ncurses.h> //tui
 
 #include <unistd.h>
 #include <fcntl.h>
+
 #include <cstdlib>
 #include <string>
 #include <vector>
 
-// Wypisuje ostatnie "rows" linii z historii (starsze sie przewijaja).
+
+//-( Wypisuje ostatnie "rows" linii z historii (starsze sie przewijaja). )-------//
 void draw_lines(WINDOW* w, const std::vector<std::string>& lines, int rows) {
     int width = getmaxx(w);
     int start = 0;
@@ -20,6 +22,8 @@ void draw_lines(WINDOW* w, const std::vector<std::string>& lines, int rows) {
     }
 }
 
+
+//---------------------------------( MAIN )--------------------------------------//
 int main(int argc, char* argv[]) {
     if (argc < 2) {
         return 1;
@@ -76,8 +80,9 @@ int main(int argc, char* argv[]) {
     std::string eggs;
     std::string num_of_tunnels;
 
-    bool running = true;
 
+    
+    bool running = true;
     while (running) {
         // Odbierz dane z main.
         ssize_t n = read(readFd, buffer, sizeof(buffer));

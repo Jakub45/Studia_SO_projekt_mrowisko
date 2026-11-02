@@ -15,7 +15,7 @@ enum class status {
     FOOD_FOUND = 2,
 };
 
-// Obsługa błędów
+//---------------------( Obsluga bledow )---------------------------//
 enum class ErrorCode {
     Ok = 0,
     FileNotFound = 1,
@@ -24,7 +24,6 @@ enum class ErrorCode {
     ForkError = 4,
     ExecErrorAnt = 5
 };
-
 const char* ToString(ErrorCode e) {
     switch (e) {
     case ErrorCode::Ok:           return "Ok";
@@ -34,9 +33,13 @@ const char* ToString(ErrorCode e) {
     case ErrorCode::ForkError:    return "Blad utworzenia procesu";
     case ErrorCode::ExecErrorAnt: return "Niepowodzenie uruchomienia procesu ant";
     }
-
     return "Nieznany blad";
 }
+
+
+
+
+
 
 // Zwraca katalog, w ktorym lezy uruchomiony program
 std::string ExeDir() {
@@ -51,7 +54,13 @@ std::string ExeDir() {
     return s.substr(0, s.find_last_of('/'));
 }
 
-// Tworzenie procesu TUI
+
+
+
+
+
+
+//---------------------------( Tworzenie procesu TUI )----------------//
 pid_t StartTui(int readFd, int writeFd) {
     pid_t pid = fork();
 
@@ -77,7 +86,10 @@ pid_t StartTui(int readFd, int writeFd) {
     return pid;
 }
 
-// Tworzenie procesu mrówki
+
+
+
+//--------------------( Tworzenie procesu mrowki )--------------------//
 pid_t Ant_born(int i, int antPipe[2]) {
     pid_t pid = fork();
 
@@ -111,7 +123,10 @@ pid_t Ant_born(int i, int antPipe[2]) {
     return pid;
 }
 
-// Tworzenie potoku
+
+
+
+//-----------------------( Tworzenie potoku )-------------------------//
 int CreatePipe(int (&pipeFd)[2]) {
     if (pipe(pipeFd) == -1) {
         std::cerr << ToString(ErrorCode::PipeError) << '\n';
@@ -121,6 +136,23 @@ int CreatePipe(int (&pipeFd)[2]) {
     return 0;
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//--------------------------( MAIN )------------------------------------//
 int main() {
     // Parametry
     // TODO
@@ -128,10 +160,12 @@ int main() {
     int antPipe[2];
     int tuiPipe[2];
 
-    // Utworzenie potoku mrówek
+
+    // Utworzenie potoku mrowek
     if (CreatePipe(antPipe) != 0) {
         return static_cast<int>(ErrorCode::PipeError);
     }
+
 
     // Utworzenie potoku do TUI
     if (CreatePipe(tuiPipe) != 0) {
@@ -140,9 +174,9 @@ int main() {
         return static_cast<int>(ErrorCode::PipeError);
     }
 
-    // Uruchomienie TUI z końcem odczytującym tuiPipe
-    pid_t tuiPid = StartTui(tuiPipe[0], tuiPipe[1]);
 
+    // Uruchomienie TUI z koncem odczytujacym tuiPipe
+    pid_t tuiPid = StartTui(tuiPipe[0], tuiPipe[1]);
     if (tuiPid == -1) {
         close(antPipe[0]);
         close(antPipe[1]);
@@ -151,25 +185,24 @@ int main() {
         return 1;
     }
 
-    // main nie potrzebuje własnej kopii końca odczytującego TUI
-    close(tuiPipe[0]);
 
+    // main nie potrzebuje wlasnej kopii konca odczytujacego TUI
+    close(tuiPipe[0]);
     std::vector<pid_t> processes;
 
-    // Utworzenie 10 procesów mrówek
+
+    // Utworzenie 10 poczatkowych procesow mrowek
     for (int i = 1; i <= 10; ++i) {
         pid_t pid = Ant_born(i, antPipe);
-
         if (pid == -1) {
             continue;
         }
-
         processes.push_back(pid);
     }
 
-    // main nie zapisuje bezpośrednio do antPipe
-    close(antPipe[1]);
 
+    // main nie zapisuje bezposrednio do antPipe
+    close(antPipe[1]);
     char buffer[256];
     std::string pending;
 
@@ -223,6 +256,7 @@ int main() {
         break;
     }
 
+    
     // Przekazanie ostatniego komunikatu bez znaku nowej linii
     if (!pending.empty()) {
         std::size_t sent = 0;
@@ -252,7 +286,7 @@ int main() {
     // Koniec danych dla TUI
     close(tuiPipe[1]);
 
-    // Oczekiwanie na zakończenie mrówek
+    // Oczekiwanie na zakonczenie mrowek
     for (pid_t pid : processes) {
         int childStatus;
 
@@ -267,7 +301,7 @@ int main() {
         }
     }
 
-    // Oczekiwanie na zakończenie TUI
+    // Oczekiwanie na zakonczenie TUI
     int tuiStatus;
 
     while (waitpid(tuiPid, &tuiStatus, 0) == -1) {

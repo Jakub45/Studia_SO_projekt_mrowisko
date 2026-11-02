@@ -10,20 +10,20 @@ find_package(Curses REQUIRED)
 
 # Glowny program mrowiska
 add_executable(mrowisko
-    src/main_anthill.cpp
-    src/ant_queen.cpp
-    src/environment.cpp
+    src/anthill/main_anthill.cpp
+    src/ant_queen/ant_queen.cpp
+    src/common/environment.cpp
 )
 
 # Program pojedynczej mrowki
 add_executable(ant
-    src/ant.cpp
-    src/environment.cpp
+    src/ant/ant.cpp
+    src/common/environment.cpp
 )
 
 # Interfejs TUI (ncurses)
 add_executable(tui
-    src/tui.cpp
+    src/tui/tui.cpp
 )
 target_include_directories(tui PRIVATE ${CURSES_INCLUDE_DIRS})
 target_link_libraries(tui PRIVATE ${CURSES_LIBRARIES})
