@@ -66,18 +66,13 @@ std::string random_ant_name(std::mt19937& gen) {
 }
 
 int ant_foraging(std::mt19937& gen) {
-    sleep_for(seconds(3));
-
+    sleep_for(seconds(3)); //czekaj 3 sekundy
     int k = random_generator(gen, 1, 200);
-
     if (k % 4 == 0) {
         return 1; // znaleziono pozywienie
     }
-
     return 0; // nie znaleziono pozywienia
 }
-
-
 
 
 int main(int argc, char* argv[]) {
@@ -92,7 +87,7 @@ int main(int argc, char* argv[]) {
     ant.ant_id = argv[1];
     ant.ant_name = random_ant_name(gen);
 
-    cout << "Mrowka nr " << ant.ant_id << ", " << ant.ant_name << ", rodzi sie!" << '\n';
+    cout << "ANT_BORN " << ant.ant_id << ", " << ant.ant_name << ", rodzi sie!" << '\n' << flush;
 
     //poszukiwanie jedzenia az do smierci
     while (ant.ant_lifetime > 0) {
@@ -104,7 +99,10 @@ int main(int argc, char* argv[]) {
             ant.ant_lifetime--;
         }
     }
-
-    ant.ant_status = Ant_status::ANT_DEAD;
-    return 0;
+    if (ant.ant_lifetime == 0){
+        // Komunikat dla procesu nadrzednego przez stdout.
+        cout << "ANT_DEAD " << ant.ant_name << '\n' << flush;
+        return 0;
+    }
+    return 1;
 }

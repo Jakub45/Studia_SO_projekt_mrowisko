@@ -2,10 +2,11 @@
 
 #include <unistd.h>
 #include <fcntl.h>
-
+#include <cerrno>
 #include <cstdlib>
 #include <string>
 #include <vector>
+#include <cstring>  // strncpy, strtok
 
 
 //-( Wypisuje ostatnie "rows" linii z historii (starsze sie przewijaja). )-------//
@@ -73,12 +74,12 @@ int main(int argc, char* argv[]) {
     std::string input;                         // wpisywany tekst
 
     // Wartosci KINGDOM CONDITION (docelowo beda przychodzic z maina).
-    std::string queen_alive;
-    std::string ant_population;
-    std::string granary_volume;
-    std::string food;
-    std::string eggs;
-    std::string num_of_tunnels;
+    bool queen_alive;
+    int ant_population;
+    int granary_volume;
+    int food;
+    int eggs;
+    int num_of_tunnels;
 
 
     
@@ -112,11 +113,31 @@ int main(int argc, char* argv[]) {
             if (type == "EVENT") {
                 events.push_back(payload);
             }
-            else if (type == "INFO") {
-                // tekst w oknie INFO jest staly, wiec nic nie robimy
+            else if (type == "CONDITION") {
+                char data[256];
+                strncpy(data, payload.c_str(), sizeof(data) - 1);
+                data[sizeof(data) - 1] = '\0';
+
+                char* token = strtok(data, " ");
+                if (token != NULL) queen_alive = atoi(token);
+
+                token = strtok(NULL, " ");
+                if (token != NULL) ant_population = atoi(token);
+
+                token = strtok(NULL, " ");
+                if (token != NULL) granary_volume = atoi(token);
+
+                token = strtok(NULL, " ");
+                if (token != NULL) food = atoi(token);
+
+                token = strtok(NULL, " ");
+                if (token != NULL) eggs = atoi(token);
+
+                token = strtok(NULL, " ");
+                if (token != NULL) num_of_tunnels = atoi(token);
             }
             else {
-                terminal_lines.push_back("command not found");
+                terminal_lines.push_back(type + ": command not found");
             }
         }
 
@@ -153,12 +174,12 @@ int main(int argc, char* argv[]) {
         );
 
         // KINGDOM CONDITION
-        mvwprintw(kingdom_text, 0, 0, "IS QUEEN ALIVE = %s",  queen_alive.c_str());
-        mvwprintw(kingdom_text, 1, 0, "ANT POPULATION = %s",  ant_population.c_str());
-        mvwprintw(kingdom_text, 2, 0, "GRANARY VOLUME = %s",  granary_volume.c_str());
-        mvwprintw(kingdom_text, 3, 0, "FOOD = %s",            food.c_str());
-        mvwprintw(kingdom_text, 4, 0, "EGGS = %s",            eggs.c_str());
-        mvwprintw(kingdom_text, 5, 0, "NUM OF TUNNELS = %s",  num_of_tunnels.c_str());
+        mvwprintw(kingdom_text, 0, 0, "IS QUEEN ALIVE = %s", queen_alive ? "true" : "false");
+        mvwprintw(kingdom_text, 1, 0, "ANT POPULATION = %d",  ant_population);
+        mvwprintw(kingdom_text, 2, 0, "GRANARY VOLUME = %d",  granary_volume);
+        mvwprintw(kingdom_text, 3, 0, "FOOD = %d",            food);
+        mvwprintw(kingdom_text, 4, 0, "EGGS = %d",            eggs);
+        mvwprintw(kingdom_text, 5, 0, "NUM OF TUNNELS = %d",  num_of_tunnels);
 
         // TERMINAL: historia + linia wpisywania w ostatnim wierszu.
         int th = getmaxy(terminal_text);

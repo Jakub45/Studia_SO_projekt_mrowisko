@@ -58,8 +58,6 @@ std::string ExeDir() {
 
 
 
-
-
 //---------------------------( Tworzenie procesu TUI )----------------//
 pid_t StartTui(int readFd, int writeFd) {
     pid_t pid = fork();
@@ -123,6 +121,34 @@ pid_t Ant_born(int i, int antPipe[2]) {
     return pid;
 }
 
+//----------------------(tworzenie procesu krolowej)-------------------//
+pid_t Queen_born(int readFd, int writeFd) {
+    pid_t pid = fork();
+
+    if (pid == -1) {
+        return -1;
+    }
+
+    if (pid == 0) {
+        close(writeFd);
+
+        std::string fd = std::to_string(readFd);
+        std::string path = ExeDir() + "/ant_queen";
+
+        execl(path.c_str(),
+              "ant_queen",
+              fd.c_str(),
+              static_cast<char*>(nullptr));
+
+        std::cerr << "Blad uruchamiania ant_queen\n";
+        _exit(1);
+    }
+    return pid;
+}
+
+
+
+
 
 
 
@@ -136,41 +162,108 @@ int CreatePipe(int (&pipeFd)[2]) {
     return 0;
 }
 
+//---------------(funkcja przekazujaca wartosci condition do tui)------------------//
+void condition_to_tui(int tuiWriteFd, int queen, int pop,
+                 int gran, int food, int eggs, int tun) {
+    std::string message =
+        "CONDITION " + 
+        std::to_string(queen) + " " +
+        std::to_string(pop) + " " +
+        std::to_string(gran) + " " +
+        std::to_string(food) + " " +
+        std::to_string(eggs) + " " +
+        std::to_string(tun) + "\n";
 
+    std::size_t sent = 0;
 
+    while (sent < message.size()) {
+        ssize_t bytesWritten = write(
+            tuiWriteFd,
+            message.data() + sent,
+            message.size() - sent
+        );
 
+        if (bytesWritten > 0) {
+            sent += static_cast<std::size_t>(bytesWritten);
+        } else if (bytesWritten == -1 && errno == EINTR) {
+            continue;
+        } else {
+            std::cerr << "Blad write() do TUI\n";
+            break;
+        }
+    }
+}
 
+//---------------(funkcja przekazujaca wartosci event do tui)------------------//
+void event_to_tui(int tuiWriteFd, const char* buffer,
+                  std::size_t bytesRead, std::string& pending) {
+    pending.append(buffer, bytesRead);
 
+    std::size_t pos;
 
+    while ((pos = pending.find('\n')) != std::string::npos) {
+        std::string message = "EVENT " + pending.substr(0, pos + 1);
+        pending.erase(0, pos + 1);
 
+        std::size_t sent = 0;
 
+        while (sent < message.size()) {
+            ssize_t bytesWritten = write(
+                tuiWriteFd,
+                message.data() + sent,
+                message.size() - sent
+            );
 
-
-
-
-
+            if (bytesWritten > 0) {
+                sent += static_cast<std::size_t>(bytesWritten);
+            } else if (bytesWritten == -1 && errno == EINTR) {
+                continue;
+            } else {
+                std::cerr << "Blad write() do TUI\n";
+                break;
+            }
+        }
+    }
+}
 
 
 
 //--------------------------( MAIN )------------------------------------//
 int main() {
-    // Parametry
-    // TODO
+    // zmienne
+    int max = 300;
+    int start = 10;
+
+
+    bool is_queen_alive = 0;
+    int population = 0;
+    int granary_volume = 0;
+    int food = 100;
+    int eggs = 0;
+    int num_of_tun = 3;
+
 
     int antPipe[2];
     int tuiPipe[2];
+    int queenPipe[2];
 
-
+    //------------Tworzenie potokow komunikacji-----------------//
     // Utworzenie potoku mrowek
     if (CreatePipe(antPipe) != 0) {
         return static_cast<int>(ErrorCode::PipeError);
     }
-
-
     // Utworzenie potoku do TUI
     if (CreatePipe(tuiPipe) != 0) {
         close(antPipe[0]);
         close(antPipe[1]);
+        return static_cast<int>(ErrorCode::PipeError);
+    }
+    // Utworzenie potoku do queen
+    if (CreatePipe(queenPipe) != 0) {
+        close(antPipe[0]);
+        close(antPipe[1]);
+        close(tuiPipe[0]);
+        close(tuiPipe[1]);
         return static_cast<int>(ErrorCode::PipeError);
     }
 
@@ -184,15 +277,27 @@ int main() {
         close(tuiPipe[1]);
         return 1;
     }
-
-
     // main nie potrzebuje wlasnej kopii konca odczytujacego TUI
     close(tuiPipe[0]);
     std::vector<pid_t> processes;
 
 
-    // Utworzenie 10 poczatkowych procesow mrowek
-    for (int i = 1; i <= 10; ++i) {
+    // Utworzenie procesu krolowej
+    pid_t queenPid = Queen_born(queenPipe[0], queenPipe[1]); 
+    if (queenPid == -1) {
+        close(antPipe[0]);
+        close(antPipe[1]);
+        close(tuiPipe[0]);
+        close(tuiPipe[1]);
+        close(queenPipe[0]);
+        close(queenPipe[1]);
+        return 1;
+    }
+    else{
+        is_queen_alive = true;
+    }
+    // Utworzenie poczatkowych procesow mrowek w ilosci start
+    for (int i = 1; i <= start; ++i) {
         pid_t pid = Ant_born(i, antPipe);
         if (pid == -1) {
             continue;
@@ -206,51 +311,48 @@ int main() {
     char buffer[256];
     std::string pending;
 
+
     while (true) {
-        ssize_t bytesRead = read(antPipe[0], buffer, sizeof(buffer));
+        ssize_t bytesRead = read(antPipe[0], buffer, sizeof(buffer) -1);
 
         if (bytesRead > 0) {
-            pending.append(buffer, static_cast<std::size_t>(bytesRead));
+            pending.append(buffer, bytesRead);
 
             std::size_t pos;
 
             while ((pos = pending.find('\n')) != std::string::npos) {
-                std::string message = "EVENT " + pending.substr(0, pos + 1);
+                std::string event = pending.substr(0, pos);
                 pending.erase(0, pos + 1);
 
-                std::size_t sent = 0;
+                // type = pierwsze slowo z TEJ linii
+                std::string type = event.substr(0, event.find(' '));
 
-                while (sent < message.size()) {
-                    ssize_t bytesWritten = write(
-                        tuiPipe[1],
-                        message.data() + sent,
-                        message.size() - sent
-                    );
-
-                    if (bytesWritten > 0) {
-                        sent += static_cast<std::size_t>(bytesWritten);
-                    }
-                    else if (bytesWritten == -1 && errno == EINTR) {
-                        continue;
-                    }
-                    else {
-                        std::cerr << "Blad write() do TUI\n";
-                        break;
-                    }
+                if (type == "ANT_BORN") {
+                    population++;
                 }
-            }
+                else if (type == "FOOD_FOUND") {
+                    food++;
+                }
+                else if (type == "ANT_DEAD") {
+                    population--;
+                }
 
+                std::string message = event + "\n";
+                std::string eventPending;
+
+                event_to_tui(tuiPipe[1], message.c_str(),
+                            message.size(), eventPending);
+                condition_to_tui(tuiPipe[1], is_queen_alive, population,
+                                granary_volume, food, eggs, num_of_tun);
+            }
             continue;
         }
-
         if (bytesRead == 0) {
             break;
         }
-
         if (errno == EINTR) {
             continue;
         }
-
         std::cerr << "Blad read() z antPipe: "
                   << std::strerror(errno) << '\n';
         break;
@@ -314,7 +416,11 @@ int main() {
         break;
     }
 
-    std::cout << "Wszystkie procesy zakonczone.\n";
 
+
+
+
+
+    std::cout << "Wszystkie procesy zakonczone.\n";
     return 0;
 }
