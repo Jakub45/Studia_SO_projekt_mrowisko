@@ -51,7 +51,7 @@ struct Ant {
     std::string ant_id;
     std::string ant_name;
     int ant_capacity = 10;
-    int ant_lifetime = 2;
+    int ant_lifetime = 20;
 };
 
 int random_generator(std::mt19937& gen, int min, int max) {

@@ -36,11 +36,6 @@ const char* ToString(ErrorCode e) {
     return "Nieznany blad";
 }
 
-
-
-
-
-
 // Zwraca katalog, w ktorym lezy uruchomiony program
 std::string ExeDir() {
     char path[PATH_MAX];
@@ -122,7 +117,7 @@ pid_t Ant_born(int i, int antPipe[2]) {
 }
 
 //----------------------(tworzenie procesu krolowej)-------------------//
-pid_t Queen_born(int readFd, int writeFd) {
+pid_t Queen_born(int readFd, int writeFd, int antWriteFd, int antPipeReadFd) {
     pid_t pid = fork();
 
     if (pid == -1) {
@@ -131,18 +126,23 @@ pid_t Queen_born(int readFd, int writeFd) {
 
     if (pid == 0) {
         close(writeFd);
-
+        close(antPipeReadFd);
         std::string fd = std::to_string(readFd);
+        std::string antFd = std::to_string(antWriteFd);
+
         std::string path = ExeDir() + "/ant_queen";
 
         execl(path.c_str(),
               "ant_queen",
               fd.c_str(),
+              antFd.c_str(),
               static_cast<char*>(nullptr));
 
         std::cerr << "Blad uruchamiania ant_queen\n";
+
         _exit(1);
     }
+
     return pid;
 }
 
@@ -162,6 +162,36 @@ int CreatePipe(int (&pipeFd)[2]) {
     return 0;
 }
 
+void message_to_queen(int population, int granary_volume,
+                      int food, int max_population, int queenWriteFd) {
+
+    std::string message =
+        std::to_string(population) + " " +
+        std::to_string(granary_volume) + " " +
+        std::to_string(food) + " " +
+        std::to_string(max_population) + "\n";
+
+    size_t sent = 0;
+
+    while (sent < message.size()) {
+        ssize_t bytes = write(
+            queenWriteFd,
+            message.data() + sent,
+            message.size() - sent
+        );
+
+        if (bytes > 0) {
+            sent += bytes;
+        }
+        else if (bytes == -1 && errno == EINTR) {
+            continue;
+        }
+        else {
+            std::cerr << "Blad wysylania danych do queen\n";
+            break;
+        }
+    }
+}
 //---------------(funkcja przekazujaca wartosci condition do tui)------------------//
 void condition_to_tui(int tuiWriteFd, int queen, int pop,
                  int gran, int food, int eggs, int tun) {
@@ -231,13 +261,13 @@ void event_to_tui(int tuiWriteFd, const char* buffer,
 //--------------------------( MAIN )------------------------------------//
 int main() {
     // zmienne
-    int max = 300;
+    int max_population = 300;
     int start = 10;
 
 
     bool is_queen_alive = 0;
     int population = 0;
-    int granary_volume = 0;
+    int granary_volume = 100;
     int food = 100;
     int eggs = 0;
     int num_of_tun = 3;
@@ -283,7 +313,12 @@ int main() {
 
 
     // Utworzenie procesu krolowej
-    pid_t queenPid = Queen_born(queenPipe[0], queenPipe[1]); 
+    pid_t queenPid = Queen_born(
+        queenPipe[0],
+        queenPipe[1],
+        antPipe[1],
+        antPipe[0]
+    );
     if (queenPid == -1) {
         close(antPipe[0]);
         close(antPipe[1]);
@@ -314,7 +349,13 @@ int main() {
 
     while (true) {
         ssize_t bytesRead = read(antPipe[0], buffer, sizeof(buffer) -1);
-
+        message_to_queen(
+            population,
+            granary_volume,
+            food,
+            max_population,
+            queenPipe[1]
+        );
         if (bytesRead > 0) {
             pending.append(buffer, bytesRead);
 
@@ -336,6 +377,16 @@ int main() {
                 else if (type == "ANT_DEAD") {
                     population--;
                 }
+                else if (type == "EGG_LAID") {
+                    eggs++;
+                    food = food - 10;
+                }
+                else if (type == "EGG_HATCHED") {
+                    eggs--;
+                }
+                else if (type == "QUEEN_ALIVE") {
+                    continue;   // tylko budzi main, nic wiecej
+}
 
                 std::string message = event + "\n";
                 std::string eventPending;
@@ -385,9 +436,11 @@ int main() {
 
     close(antPipe[0]);
 
+
+
+
     // Koniec danych dla TUI
     close(tuiPipe[1]);
-
     // Oczekiwanie na zakonczenie mrowek
     for (pid_t pid : processes) {
         int childStatus;
@@ -402,7 +455,6 @@ int main() {
             break;
         }
     }
-
     // Oczekiwanie na zakonczenie TUI
     int tuiStatus;
 
@@ -415,12 +467,6 @@ int main() {
                   << std::strerror(errno) << '\n';
         break;
     }
-
-
-
-
-
-
     std::cout << "Wszystkie procesy zakonczone.\n";
     return 0;
 }

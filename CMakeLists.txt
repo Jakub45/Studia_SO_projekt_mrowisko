@@ -11,10 +11,14 @@ find_package(Curses REQUIRED)
 # Glowny program mrowiska
 add_executable(mrowisko
     src/anthill/main_anthill.cpp
-    src/ant_queen/ant_queen.cpp
     src/common/environment.cpp
 )
 
+# Proces krolowej
+add_executable(ant_queen
+    src/ant_queen/ant_queen.cpp
+    src/common/environment.cpp
+)
 # Program pojedynczej mrowki
 add_executable(ant
     src/ant/ant.cpp
