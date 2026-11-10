@@ -4,6 +4,8 @@
 #include <thread>
 #include <chrono>
 
+#include "../common/error_handler/error_handler.hpp"
+
 using namespace std;
 using namespace std::this_thread;
 using namespace std::chrono;
@@ -80,6 +82,9 @@ int main(int argc, char* argv[]) {
     std::mt19937 gen(rd());
 
     if (argc < 2) {
+        //obsluga bledu
+        Error(ErrorType::ERROR_ARGUMENT, ErrorSource::SOURCE_ANT, 
+        "Blad przekazania argumentow do Ant");
         return 1;
     }
 

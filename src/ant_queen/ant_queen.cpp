@@ -15,15 +15,7 @@
 
 #define MSG_BUF_SIZE 256
 
-enum class Queen_status {
-    QUEEN_DEAD = 0,
-    QUEEN_BORN = 1,
-};
-
-struct Ant_Queen {
-    Queen_status queen_status = Queen_status::QUEEN_BORN;
-    int queen_lifetime;
-};
+#include "../common/error_handler/error_handler.hpp"
 
 
 struct EggData
@@ -34,31 +26,15 @@ struct EggData
 };
 
 
-//---------------------( Obsluga bledow )---------------------------//
-enum class ErrorCode {
-    Ok = 0,
-    FileNotFound = 1,
-    PipeError = 2,
-    Dup2Error = 3,
-    ForkError = 4,
-    ExecErrorAnt = 5
-};
-const char* ToString(ErrorCode e) {
-    switch (e) {
-    case ErrorCode::Ok:           return "Ok";
-    case ErrorCode::FileNotFound: return "Plik nie znaleziony";
-    case ErrorCode::PipeError:    return "Blad potoku";
-    case ErrorCode::Dup2Error:    return "Blad przekierowania deskryptora";
-    case ErrorCode::ForkError:    return "Blad utworzenia procesu";
-    case ErrorCode::ExecErrorAnt: return "Niepowodzenie uruchomienia procesu ant";
-    }
-    return "Nieznany blad";
-}
 // Zwraca katalog, w ktorym lezy uruchomiony program
 std::string ExeDir() {
     char path[PATH_MAX];
     ssize_t len = readlink("/proc/self/exe", path, sizeof(path) - 1);
+
+    //obsluga bledu
     if (len == -1) {
+        Error(ErrorType::ERROR_READ, ErrorSource::SOURCE_ANT_QUEEN, 
+        "Blad odczytu sciezki programu", errno);
         return ".";
     }
     path[len] = '\0';
@@ -68,19 +44,23 @@ std::string ExeDir() {
 }
 
 
-
-
 pid_t Ant_born(int i, int antWriteFd) {
     pid_t pid = fork();
 
+    //obsluga bledu
     if (pid == -1) {
+        Error(ErrorType::ERROR_FORK, ErrorSource::SOURCE_ANT_QUEEN, 
+        "blad utworzenia procesu ant",errno);
         return -1;
     }
 
     if (pid == 0) {
 
+        //obsluga bledu
         if (dup2(antWriteFd, STDOUT_FILENO) == -1) {
-            _exit(static_cast<int>(ErrorCode::Dup2Error));
+            Error(ErrorType::ERROR_DUP2, ErrorSource::SOURCE_ANT_QUEEN, 
+            "Blad przekierowania STDOUT do potoku Ant", errno);
+            _exit(static_cast<int>(ErrorType::ERROR_DUP2));
         }
 
         close(antWriteFd);
@@ -93,7 +73,10 @@ pid_t Ant_born(int i, int antWriteFd) {
               antId.c_str(),
               static_cast<char*>(nullptr));
 
-        _exit(static_cast<int>(ErrorCode::ExecErrorAnt));
+        //obsluga bledu
+        Error(ErrorType::ERROR_EXEC, ErrorSource::SOURCE_ANT_QUEEN,
+        "Blad uruchomienia programu Ant", errno);
+        _exit(static_cast<int>(ErrorType::ERROR_EXEC));
     }
 
     return pid;
@@ -115,8 +98,6 @@ pid_t Ant_born(int i, int antWriteFd) {
 //informacje o ilosci jedzenia  (zmienna food)
 
 
-
-
 EggData egg_incubator(int x) {
     struct timespec ts;
     EggData egg;
@@ -126,7 +107,6 @@ EggData egg_incubator(int x) {
 
     return egg;
 }
-
 
 
 
@@ -154,6 +134,8 @@ int read_line(int fd, char* buffer, int* buf_len, char* line, int line_size) {
 
         if (*buf_len >= MSG_BUF_SIZE) {
             *buf_len = 0;   // bufor pelny bez '\n' - odrzuc smieci
+            Error(ErrorType::ERROR_BUFFER_OVERFLOW, ErrorSource::SOURCE_ANT_QUEEN, 
+            "Przepelnienie bufora podczas odbierania danych. Program dalej dziala", 0);
         }
 
         ssize_t bytes = read(fd, buffer + *buf_len, MSG_BUF_SIZE - *buf_len);
@@ -168,7 +150,10 @@ int read_line(int fd, char* buffer, int* buf_len, char* line, int line_size) {
             continue;
         }
         else {
-            return -1;  // blad
+            //obsluga bledu
+            Error(ErrorType::ERROR_READ, ErrorSource::SOURCE_ANT_QUEEN, 
+            "Blad odczytu danych z potoku", errno);
+            return -1;
         }
     }
 }
@@ -182,7 +167,9 @@ int parse_message(char* line, int* population, int* granary_volume,
     char* token = strtok(line, " ");
     for (int i = 0; i < 4; i++) {
         if (token == NULL) {
-            return 0;   // za malo wartosci
+            Error(ErrorType::ERROR_PARSE, ErrorSource::SOURCE_ANT_QUEEN,
+            "Za malo wartosci w odebranym komunikacie", 0);
+            return 0;
         }
         *targets[i] = atoi(token);
         token = strtok(NULL, " ");
@@ -196,22 +183,46 @@ int parse_message(char* line, int* population, int* granary_volume,
 
 
 bool egg_ready(EggData egg, int incubation_time) {
-
     struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-
+    if (clock_gettime(CLOCK_MONOTONIC, &now) == -1) {
+        Error(
+            ErrorType::ERROR_CLOCK,
+            ErrorSource::SOURCE_ANT_QUEEN,
+            "Blad funkcji czasu dla jajek",
+            errno
+        );
+        return false;
+    }
     time_t elapsed = now.tv_sec - egg.birth_time.tv_sec;
-
     return elapsed >= incubation_time;
 }
 
 void send_to_anthill(int fd, const char* text) {
-    write(fd, text, strlen(text));
+    size_t len = strlen(text);
+    size_t sent = 0;
+
+    while (sent < len) {
+        ssize_t bytes = write(fd, text + sent, len - sent);
+
+        if (bytes > 0) {
+            sent += bytes;
+        }
+        else if (bytes == -1 && errno == EINTR) {
+            continue;
+        }
+        else {
+            Error(ErrorType::ERROR_WRITE, ErrorSource::SOURCE_ANT_QUEEN,
+                "Blad wysylania danych do main", bytes == -1 ? errno : 0);
+            return;
+        }
+    }
 }
 
 
 int main(int argc, char* argv[]) {
     if (argc < 3) {
+        Error(ErrorType::ERROR_ARGUMENT, ErrorSource::SOURCE_ANT_QUEEN,
+        "Blad przekazywanych danych z main do Ant_Queen",errno);
         return 1;
     }
     int queenReadFd = atoi(argv[1]);
@@ -244,17 +255,30 @@ int main(int argc, char* argv[]) {
             int r = read_line(queenReadFd, buffer, &buf_len, line, sizeof(line));
             if (r == 1) {
                 if (!parse_message(line, &population, &granary_volume, &food, &max_population)) {
-                    fprintf(stderr, "Niepoprawny format komunikatu\n");
                 }
             }
             else if (r == 0) {
                 running = false;   // main zamknal potok
             }
+
         }
         else if (ret == 0) {
             // cisza przez 500 ms - daj znac main, ze zyjemy
             // (main odpowie wtedy swoim stanem)
             send_to_anthill(antWriteFd, "QUEEN_ALIVE\n");
+        }
+        else if (ret == -1) {
+            if (errno == EINTR) {
+                continue;
+            }
+
+            Error(
+                ErrorType::ERROR_POLL,
+                ErrorSource::SOURCE_ANT_QUEEN,
+                "Blad oczekiwania na dane z potoku",
+                errno
+            );
+            continue;
         }
 
         // zlozenie jaja: jest miejsce w wylegarni, miejsce w populacji i jedzenie
@@ -285,7 +309,12 @@ int main(int argc, char* argv[]) {
         }
 
         // posprzataj zakonczone procesy mrowek (zeby nie zostawaly zombie)
-        waitpid(-1, NULL, WNOHANG);
+        pid_t result = waitpid(-1, NULL, WNOHANG);
+
+        if (result == -1 && errno != EINTR && errno != ECHILD) {
+            Error(ErrorType::ERROR_WAITPID, ErrorSource::SOURCE_ANT_QUEEN,
+                "Blad waitpid czyszczacy procesy mrowek", errno );
+        }   
     }
     return 0;
 }

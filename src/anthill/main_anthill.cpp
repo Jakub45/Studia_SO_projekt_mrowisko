@@ -9,38 +9,18 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
-enum class status {
-    ANT_BORN = 0,
-    ANT_DEAD = 1,
-    FOOD_FOUND = 2,
-};
+#include "../common/error_handler/error_handler.hpp"
 
-//---------------------( Obsluga bledow )---------------------------//
-enum class ErrorCode {
-    Ok = 0,
-    FileNotFound = 1,
-    PipeError = 2,
-    Dup2Error = 3,
-    ForkError = 4,
-    ExecErrorAnt = 5
-};
-const char* ToString(ErrorCode e) {
-    switch (e) {
-    case ErrorCode::Ok:           return "Ok";
-    case ErrorCode::FileNotFound: return "Plik nie znaleziony";
-    case ErrorCode::PipeError:    return "Blad potoku";
-    case ErrorCode::Dup2Error:    return "Blad przekierowania deskryptora";
-    case ErrorCode::ForkError:    return "Blad utworzenia procesu";
-    case ErrorCode::ExecErrorAnt: return "Niepowodzenie uruchomienia procesu ant";
-    }
-    return "Nieznany blad";
-}
 
 // Zwraca katalog, w ktorym lezy uruchomiony program
 std::string ExeDir() {
     char path[PATH_MAX];
     ssize_t len = readlink("/proc/self/exe", path, sizeof(path) - 1);
+
+    //obsluga bledu
     if (len == -1) {
+        Error(ErrorType::ERROR_READ, ErrorSource::SOURCE_MAIN_ANTHILL, 
+        "Blad odczytu sciezki programu");
         return ".";
     }
     path[len] = '\0';
@@ -49,15 +29,14 @@ std::string ExeDir() {
     return s.substr(0, s.find_last_of('/'));
 }
 
-
-
-
-
 //---------------------------( Tworzenie procesu TUI )----------------//
 pid_t StartTui(int readFd, int writeFd) {
     pid_t pid = fork();
 
-    if (pid == -1) {
+    //obsluga bledu
+    if (pid == -1) { 
+        Error(ErrorType::ERROR_FORK, ErrorSource::SOURCE_MAIN_ANTHILL, 
+        "Blad uruchomienia procesu TUI"); 
         return -1;
     }
 
@@ -72,7 +51,9 @@ pid_t StartTui(int readFd, int writeFd) {
               fd.c_str(),
               static_cast<char*>(nullptr));
 
-        std::cerr << "Blad uruchamiania TUI\n";
+        //obsluga bledu
+        Error(ErrorType::ERROR_EXEC, ErrorSource::SOURCE_MAIN_ANTHILL, 
+        "Blad uruchamiania TUI");
         _exit(1);
     }
 
@@ -86,33 +67,38 @@ pid_t StartTui(int readFd, int writeFd) {
 pid_t Ant_born(int i, int antPipe[2]) {
     pid_t pid = fork();
 
-    if (pid == -1) {
-        std::cerr << ToString(ErrorCode::ForkError) << '\n';
+    //obsluga bledu
+    if (pid == -1) { 
+        Error(ErrorType::ERROR_FORK, ErrorSource::SOURCE_MAIN_ANTHILL, 
+        "Blad tworzenia procesu Ant"); 
         return -1;
     }
 
+    
     if (pid == 0) {
         close(antPipe[0]);
 
+        //obsluga bledu
         if (dup2(antPipe[1], STDOUT_FILENO) == -1) {
-            std::cerr << ToString(ErrorCode::Dup2Error) << '\n';
-            _exit(static_cast<int>(ErrorCode::Dup2Error));
+            Error(ErrorType::ERROR_DUP2, ErrorSource::SOURCE_MAIN_ANTHILL,
+            "Blad przekierowania STDOUT procesu Ant");
+            _exit(static_cast<int>(ErrorType::ERROR_DUP2));
         }
 
         close(antPipe[1]);
-
         std::string antId = std::to_string(i);
         std::string antPath = ExeDir() + "/ant";
-
         execl(antPath.c_str(),
               "ant",
               antId.c_str(),
               static_cast<char*>(nullptr));
 
-        std::cerr << ToString(ErrorCode::ExecErrorAnt) << '\n';
-        _exit(static_cast<int>(ErrorCode::ExecErrorAnt));
-    }
 
+        //obsluga bledu
+        Error(ErrorType::ERROR_EXEC, ErrorSource::SOURCE_MAIN_ANTHILL,
+        "Blad uruchomienia pliku wykonywalnego ant");
+        _exit(static_cast<int>(ErrorType::ERROR_EXEC));
+    }
     return pid;
 }
 
@@ -120,7 +106,10 @@ pid_t Ant_born(int i, int antPipe[2]) {
 pid_t Queen_born(int readFd, int writeFd, int antWriteFd, int antPipeReadFd) {
     pid_t pid = fork();
 
-    if (pid == -1) {
+    //obsluga bledu
+    if (pid == -1) { 
+        Error(ErrorType::ERROR_FORK, ErrorSource::SOURCE_MAIN_ANTHILL, 
+        "Blad uruchomienia procesu Queen"); 
         return -1;
     }
 
@@ -138,8 +127,9 @@ pid_t Queen_born(int readFd, int writeFd, int antWriteFd, int antPipeReadFd) {
               antFd.c_str(),
               static_cast<char*>(nullptr));
 
-        std::cerr << "Blad uruchamiania ant_queen\n";
-
+        
+        Error(ErrorType::ERROR_EXEC, ErrorSource::SOURCE_MAIN_ANTHILL,
+        "Blad uruchomienia ant_queen");
         _exit(1);
     }
 
@@ -147,18 +137,14 @@ pid_t Queen_born(int readFd, int writeFd, int antWriteFd, int antPipeReadFd) {
 }
 
 
-
-
-
-
-
 //-----------------------( Tworzenie potoku )-------------------------//
 int CreatePipe(int (&pipeFd)[2]) {
+    //obsluga bledu
     if (pipe(pipeFd) == -1) {
-        std::cerr << ToString(ErrorCode::PipeError) << '\n';
-        return static_cast<int>(ErrorCode::PipeError);
+        Error(ErrorType::ERROR_PIPE, ErrorSource::SOURCE_MAIN_ANTHILL,
+        "blad utworzenia pipe");
+        return -1;
     }
-
     return 0;
 }
 
@@ -186,8 +172,11 @@ void message_to_queen(int population, int granary_volume,
         else if (bytes == -1 && errno == EINTR) {
             continue;
         }
+
         else {
-            std::cerr << "Blad wysylania danych do queen\n";
+            //obsluga bledu
+            Error(ErrorType::ERROR_WRITE, ErrorSource::SOURCE_MAIN_ANTHILL,
+            "Blad wysylania danych do procesu queen");
             break;
         }
     }
@@ -215,10 +204,14 @@ void condition_to_tui(int tuiWriteFd, int queen, int pop,
 
         if (bytesWritten > 0) {
             sent += static_cast<std::size_t>(bytesWritten);
-        } else if (bytesWritten == -1 && errno == EINTR) {
+        } 
+        else if (bytesWritten == -1 && errno == EINTR) {
             continue;
-        } else {
-            std::cerr << "Blad write() do TUI\n";
+        } 
+        else {
+            //obsluga bledu
+            Error(ErrorType::ERROR_WRITE, ErrorSource::SOURCE_MAIN_ANTHILL,
+            "Blad wysylania danych condition do TUI");
             break;
         }
     }
@@ -249,7 +242,9 @@ void event_to_tui(int tuiWriteFd, const char* buffer,
             } else if (bytesWritten == -1 && errno == EINTR) {
                 continue;
             } else {
-                std::cerr << "Blad write() do TUI\n";
+                //obsluga bledu
+                Error(ErrorType::ERROR_WRITE, ErrorSource::SOURCE_MAIN_ANTHILL,
+                "Blad wysylania danych event do TUI");
                 break;
             }
         }
@@ -278,39 +273,43 @@ int main() {
     int queenPipe[2];
 
     //------------Tworzenie potokow komunikacji-----------------//
-    // Utworzenie potoku mrowek
+    // Utworzenie potoku Ant
+    //obsluga bledu
     if (CreatePipe(antPipe) != 0) {
-        return static_cast<int>(ErrorCode::PipeError);
+        return -1;
     }
     // Utworzenie potoku do TUI
+    //obsluga bledu
     if (CreatePipe(tuiPipe) != 0) {
         close(antPipe[0]);
         close(antPipe[1]);
-        return static_cast<int>(ErrorCode::PipeError);
+        return -1;
     }
-    // Utworzenie potoku do queen
+    // Utworzenie potoku do Queen
+    //obsluga bledu
     if (CreatePipe(queenPipe) != 0) {
         close(antPipe[0]);
         close(antPipe[1]);
         close(tuiPipe[0]);
         close(tuiPipe[1]);
-        return static_cast<int>(ErrorCode::PipeError);
+        return -1;
     }
 
 
     // Uruchomienie TUI z koncem odczytujacym tuiPipe
     pid_t tuiPid = StartTui(tuiPipe[0], tuiPipe[1]);
+    //obsluga bledu
     if (tuiPid == -1) {
         close(antPipe[0]);
         close(antPipe[1]);
         close(tuiPipe[0]);
         close(tuiPipe[1]);
-        return 1;
     }
+
+
     // main nie potrzebuje wlasnej kopii konca odczytujacego TUI
     close(tuiPipe[0]);
     std::vector<pid_t> processes;
-
 
     // Utworzenie procesu krolowej
     pid_t queenPid = Queen_born(
@@ -326,7 +325,6 @@ int main() {
         close(tuiPipe[1]);
         close(queenPipe[0]);
         close(queenPipe[1]);
-        return 1;
     }
     else{
         is_queen_alive = true;
@@ -404,8 +402,9 @@ int main() {
         if (errno == EINTR) {
             continue;
         }
-        std::cerr << "Blad read() z antPipe: "
-                  << std::strerror(errno) << '\n';
+        //obsluga bledu
+        Error(ErrorType::ERROR_READ, ErrorSource::SOURCE_MAIN_ANTHILL,
+        "Blad read z antPipe");
         break;
     }
 
@@ -428,15 +427,13 @@ int main() {
                 continue;
             }
             else {
-                std::cerr << "Blad przekazywania ostatniego komunikatu do TUI\n";
-                break;
+                //obsluga bledu
+                Error(ErrorType::ERROR_WRITE, ErrorSource::SOURCE_MAIN_ANTHILL,
+                "Blad przekazywania ostatniego komunikatu do TUI");
             }
         }
     }
-
     close(antPipe[0]);
-
-
 
 
     // Koniec danych dla TUI
@@ -449,9 +446,9 @@ int main() {
             if (errno == EINTR) {
                 continue;
             }
-
-            std::cerr << "Blad waitpid(): "
-                      << std::strerror(errno) << '\n';
+            //obsluga bledu
+            Error(ErrorType::ERROR_WAITPID, ErrorSource::SOURCE_MAIN_ANTHILL,
+            "Blad waitpid dla Ant");
             break;
         }
     }
@@ -462,11 +459,13 @@ int main() {
         if (errno == EINTR) {
             continue;
         }
-
-        std::cerr << "Blad waitpid() dla TUI: "
-                  << std::strerror(errno) << '\n';
+        //obsluga bledu
+        Error(ErrorType::ERROR_WAITPID, ErrorSource::SOURCE_MAIN_ANTHILL,
+        "Blad waitpid dla TUI");
         break;
     }
+
+
     std::cout << "Wszystkie procesy zakonczone.\n";
     return 0;
 }
