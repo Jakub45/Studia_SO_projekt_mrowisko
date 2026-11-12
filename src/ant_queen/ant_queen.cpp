@@ -180,8 +180,6 @@ int parse_message(char* line, int* population, int* granary_volume,
 
 
 
-
-
 bool egg_ready(EggData egg, int incubation_time) {
     struct timespec now;
     if (clock_gettime(CLOCK_MONOTONIC, &now) == -1) {

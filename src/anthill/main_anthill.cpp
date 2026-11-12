@@ -11,6 +11,9 @@
 
 #include "../common/error_handler/error_handler.hpp"
 
+#include <cstdio>
+#include <ctime>
+#include <initializer_list>
 
 // Zwraca katalog, w ktorym lezy uruchomiony program
 std::string ExeDir() {
@@ -251,6 +254,31 @@ void event_to_tui(int tuiWriteFd, const char* buffer,
     }
 }
 
+//funkcje zapisu do pliku logow
+//lista inicjalizujaca pozwala zapisac dowolna ilosc ciagow znakow
+void saveLogs(FILE* fileLog, const std::string& text) {
+    time_t t = time(NULL);
+    struct tm* time = localtime(&t);
+
+    if (fileLog != NULL && time != NULL) {
+        fprintf(fileLog, "[%02d:%02d:%02d] : [%s] \n",
+            time->tm_hour,
+            time->tm_min,
+            time->tm_sec,
+            text.c_str() //funkcja c++ do zapisu ciagu znakow
+        );
+        fflush(fileLog);
+    }
+}
+//zapis stopki do logu
+void saveFooter(FILE* fileLog){
+    if (fileLog != NULL) {
+        fprintf(fileLog,
+            "=============================NEW SIMULATION===============================\n"
+        );
+        fflush(fileLog);
+    }
+}
 
 
 //--------------------------( MAIN )------------------------------------//
@@ -259,7 +287,6 @@ int main() {
     int max_population = 300;
     int start = 10;
 
-
     bool is_queen_alive = 0;
     int population = 0;
     int granary_volume = 100;
@@ -267,10 +294,24 @@ int main() {
     int eggs = 0;
     int num_of_tun = 3;
 
-
     int antPipe[2];
     int tuiPipe[2];
     int queenPipe[2];
+
+
+
+    //------------otwarcie pliku do zapisu logow----------------//
+    time_t t = time(NULL);
+    struct tm* czas = localtime(&t);
+    FILE* fileLog = fopen("../logs/logs.log", "a");
+    //obsluga bledu
+    if (fileLog == NULL){
+        Error(ErrorType::ERROR_FILE_NOT_FOUND, ErrorSource::SOURCE_MAIN_ANTHILL, 
+        "blad otwarcia pliku logs.log", errno);
+    }
+    saveFooter(fileLog); //zapis stopki
+
+
 
     //------------Tworzenie potokow komunikacji-----------------//
     // Utworzenie potoku Ant
@@ -391,6 +432,7 @@ int main() {
 
                 event_to_tui(tuiPipe[1], message.c_str(),
                             message.size(), eventPending);
+                saveLogs(fileLog, event);
                 condition_to_tui(tuiPipe[1], is_queen_alive, population,
                                 granary_volume, food, eggs, num_of_tun);
             }
@@ -467,5 +509,7 @@ int main() {
 
 
     std::cout << "Wszystkie procesy zakonczone.\n";
+
+    fclose(fileLog);
     return 0;
 }
