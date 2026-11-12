@@ -1,2 +1,2 @@
 # Studia_SO_projekt_mrowisko
-Symulacja kolonii mrówek, projekt z Systemów Operacyjnych
+Ant Colony Simulation – Project for the Operating Systems course
