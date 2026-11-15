@@ -161,11 +161,11 @@ int read_line(int fd, char* buffer, int* buf_len, char* line, int line_size) {
 // Rozbija linie na tokeny i zamienia je na liczby przez atoi.
 // Zwraca 1 jesli udalo sie odczytac wszystkie 4 wartosci, inaczej 0.
 int parse_message(char* line, int* population, int* granary_volume,
-                  int* food, int* max_population) {
-    int* targets[4] = { population, granary_volume, food, max_population };
+                  int* food, int* max_population, int* laid_seen) {
+    int* targets[5] = { population, granary_volume, food, max_population, laid_seen };
 
     char* token = strtok(line, " ");
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         if (token == NULL) {
             Error(ErrorType::ERROR_PARSE, ErrorSource::SOURCE_ANT_QUEEN,
             "Za malo wartosci w odebranym komunikacie", 0);
@@ -195,6 +195,11 @@ bool egg_ready(EggData egg, int incubation_time) {
     return elapsed >= incubation_time;
 }
 
+
+
+
+
+
 void send_to_anthill(int fd, const char* text) {
     size_t len = strlen(text);
     size_t sent = 0;
@@ -218,13 +223,14 @@ void send_to_anthill(int fd, const char* text) {
 
 
 int main(int argc, char* argv[]) {
-    if (argc < 3) {
+    if (argc < 4) {
         Error(ErrorType::ERROR_ARGUMENT, ErrorSource::SOURCE_ANT_QUEEN,
         "Blad przekazywanych danych z main do Ant_Queen",errno);
         return 1;
     }
     int queenReadFd = atoi(argv[1]);
-    int antWriteFd = atoi(argv[2]);
+    int antWriteFd  = atoi(argv[2]);      // tylko dla Ant_born (stdout mrowek)
+    int outWriteFd  = atoi(argv[3]);      // komunikaty krolowej do main
 
     char buffer[MSG_BUF_SIZE];
     int buf_len = 0;
@@ -234,7 +240,11 @@ int main(int argc, char* argv[]) {
     int granary_volume = 0;
     int food = 0;
     int max_population = 0;
-    int num_of_egg = 11;
+    int num_of_egg = 0;
+
+    int laid_seen = 0;   // z komunikatu main
+
+
 
     std::vector<EggData> egg_data;
 
@@ -249,21 +259,25 @@ int main(int argc, char* argv[]) {
         int ret = poll(&pfd, 1, 500);
 
         if (ret > 0) {
-            // main cos przyslal - odbierz i rozbij na zmienne
             int r = read_line(queenReadFd, buffer, &buf_len, line, sizeof(line));
             if (r == 1) {
-                if (!parse_message(line, &population, &granary_volume, &food, &max_population)) {
+                parse_message(line, &population, &granary_volume, &food, &max_population, &laid_seen);
+
+                // wyczerp pozostale pelne linie - zostaje najnowszy stan
+                while (memchr(buffer, '\n', buf_len) != NULL) {
+                    if (read_line(queenReadFd, buffer, &buf_len, line, sizeof(line)) == 1) {
+                        parse_message(line, &population, &granary_volume, &food, &max_population, &laid_seen);
+                    }
                 }
             }
             else if (r == 0) {
-                running = false;   // main zamknal potok
+                running = false;
             }
-
         }
         else if (ret == 0) {
             // cisza przez 500 ms - daj znac main, ze zyjemy
             // (main odpowie wtedy swoim stanem)
-            send_to_anthill(antWriteFd, "QUEEN_ALIVE\n");
+            send_to_anthill(outWriteFd, "QUEEN_ALIVE\n");
         }
         else if (ret == -1) {
             if (errno == EINTR) {
@@ -280,22 +294,23 @@ int main(int argc, char* argv[]) {
         }
 
         // zlozenie jaja: jest miejsce w wylegarni, miejsce w populacji i jedzenie
+        // (food_effective uwzglednia jaja, o ktorych main jeszcze nie wie)
+        int food_effective = food - 10 * (num_of_egg - laid_seen);
+
         if ((int)egg_data.size() < granary_volume
             && population < max_population
-            && food >= 10) {
+            && food_effective >= 10) {
             egg_data.push_back(egg_incubator(num_of_egg));
             num_of_egg++;
-            food = food - 10;
-            send_to_anthill(antWriteFd, "EGG_LAID\n");
+            send_to_anthill(outWriteFd, "EGG_LAID\n");
         }
-
         // sprawdzenie, czy jakies jajo sie wykluło
         for (size_t i = 0; i < egg_data.size(); ) {
             if (egg_ready(egg_data[i], 30)) {
                 pid_t antPid = Ant_born(egg_data[i].id, antWriteFd);
                 if (antPid != -1) {
                     egg_data.erase(egg_data.begin() + i);
-                    send_to_anthill(antWriteFd, "EGG_HATCHED\n");
+                    send_to_anthill(outWriteFd, "EGG_HATCHED\n");
                 }
                 else {
                     i++;

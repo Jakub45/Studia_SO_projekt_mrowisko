@@ -4,10 +4,11 @@
 #include <fcntl.h>
 #include <cerrno>
 #include <cstdlib>
+#include <cstdio>
 #include <string>
 #include <vector>
 #include <cstring>  // strncpy, strtok
-
+#include <iostream> //flush
 
 //-( Wypisuje ostatnie "rows" linii z historii (starsze sie przewijaja). )-------//
 void draw_lines(WINDOW* w, const std::vector<std::string>& lines, int rows) {
@@ -23,14 +24,25 @@ void draw_lines(WINDOW* w, const std::vector<std::string>& lines, int rows) {
     }
 }
 
+void send_cmd(int fd, const std::string& msg) {
+    size_t sent = 0;
+    while (sent < msg.size()) {
+        ssize_t n = write(fd, msg.data() + sent, msg.size() - sent);
+        if (n > 0) sent += n;
+        else if (n == -1 && errno == EINTR) continue;
+        else break;
+    }
+}
+
 
 //---------------------------------( MAIN )--------------------------------------//
 int main(int argc, char* argv[]) {
-    if (argc < 2) {
+    if (argc < 3) {
         return 1;
     }
-
+    
     int readFd = atoi(argv[1]);
+    int cmdFd = atoi(argv[2]);
 
     // Pipe nieblokujacy, zeby read() nie zawieszal interfejsu.
     int flags = fcntl(readFd, F_GETFL, 0);
@@ -81,19 +93,21 @@ int main(int argc, char* argv[]) {
     int eggs;
     int num_of_tunnels;
 
+    int number;
+
 
     
     bool running = true;
     while (running) {
-        // Odbierz dane z main.
-        ssize_t n = read(readFd, buffer, sizeof(buffer));
-
-        if (n > 0) {
+        // Odbierz dane z main (czytaj az do opróżnienia pipe'a).
+        ssize_t n;
+        while ((n = read(readFd, buffer, sizeof(buffer))) > 0) {
             received.append(buffer, n);
         }
-        else if (n == 0) {
-            running = false;                   // main zamknal pipe
+        if (n == 0) {
+            running = false;               // main zamknal pipe
         }
+        // n == -1 z EAGAIN = brak danych, to normalne
 
         // Przetwarzaj kazda kompletna linie.
         std::size_t pos;
@@ -163,18 +177,17 @@ int main(int argc, char* argv[]) {
         // INFO: staly tekst.
         mvwprintw(info_text, 0, 0, 
             "ANTHILL SIMULATION \n"
-            "----------------------\n"
-            "Program do symulacji mrowiska.\n\n"
-            "AVALIBLE COMMANDS  \n"
-            "CTRL + Q          - wyjscie z aplikacji.\n"
-            "QUEEN_KILL        - usmiercenie krolowej.\n"
-            "ANT_KILL (number) - liczba mrowek do usmiercenia.\n"
-            "ANTHILL_EXPANSION - Rozbudowa mrowiska (SIGUSR1).\n"
-            "TUNNEL_COLLAPSE   - zawalenie losowego tunelu (SIGUSR2).\n"
+            "AVALIBLE COMMANDS:  \n"
+            "quit              - wyjscie z aplikacji (poprawne). \n"
+            "ctrl + Q          - wyjscie z aplikacji (awaryjne).\n"
+            "queen_kill        - usmiercenie krolowej.\n"
+            "ant_kill (number) - liczba mrowek do usmiercenia.\n"
+            "anthill_expansion - Rozbudowa mrowiska (SIGUSR1).\n"
+            "tunnel_collapse   - zawalenie losowego tunelu (SIGUSR2).\n"
         );
 
         // KINGDOM CONDITION
-        mvwprintw(kingdom_text, 0, 0, "IS QUEEN ALIVE = %s", queen_alive ? "true" : "false");
+        mvwprintw(kingdom_text, 0, 0, "IS QUEEN ALIVE = %s",  queen_alive ? "true" : "false");
         mvwprintw(kingdom_text, 1, 0, "ANT POPULATION = %d",  ant_population);
         mvwprintw(kingdom_text, 2, 0, "GRANARY VOLUME = %d",  granary_volume);
         mvwprintw(kingdom_text, 3, 0, "FOOD = %d",            food);
@@ -205,11 +218,28 @@ int main(int argc, char* argv[]) {
         if (key == 17) {                                    // Ctrl+Q
             running = false;
         }
+        //komunikacja z main_anthill
         else if (key == '\n' || key == '\r' || key == KEY_ENTER) {
             if (!input.empty()) {
                 terminal_lines.push_back("> " + input);
-                // Na razie zadna komenda nie jest znana.
-                terminal_lines.push_back("command not found");
+                if (input == "quit") {
+                    send_cmd(cmdFd, "QUIT\n");
+                }
+                else if (input == "queen_kill") {
+                    send_cmd(cmdFd, "QUEEN_KILL\n");
+                }
+                else if (sscanf(input.c_str(), "ant_kill %d", &number) == 1) {
+                    send_cmd(cmdFd, "ANT_KILL " + std::to_string(number) + "\n");
+                }
+                else if (input == "anthill_expansion") {
+                    send_cmd(cmdFd, "ANTHILL_EXPANSION\n");
+                }
+                else if (input == "tunnel_collapse") {
+                    send_cmd(cmdFd, "TUNNEL_COLLAPSE\n");
+                }
+                else {
+                    terminal_lines.push_back("command not found");
+                }
                 input = "";
             }
         }

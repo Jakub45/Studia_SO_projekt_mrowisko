@@ -68,8 +68,9 @@ std::string random_ant_name(std::mt19937& gen) {
 }
 
 int ant_foraging(std::mt19937& gen) {
-    sleep_for(seconds(3)); //czekaj 3 sekundy
-    int k = random_generator(gen, 1, 200);
+    int k = random_generator(gen, 1, 4); //losowosc znalezienia
+    int time = random_generator(gen, 3,10); //losowosc czasu szukania
+    sleep_for(seconds(time)); //czekaj time sekund
     if (k % 4 == 0) {
         return 1; // znaleziono pozywienie
     }
@@ -84,7 +85,7 @@ int main(int argc, char* argv[]) {
     if (argc < 2) {
         //obsluga bledu
         Error(ErrorType::ERROR_ARGUMENT, ErrorSource::SOURCE_ANT, 
-        "Blad przekazania argumentow do Ant");
+        "Blad przekazania argumentow do Ant",errno);
         return 1;
     }
 
