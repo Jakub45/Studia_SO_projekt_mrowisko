@@ -13,9 +13,15 @@
 #include <poll.h>
 #include <stdio.h>
 
+#include <signal.h> //sigusr
+
 #define MSG_BUF_SIZE 256
 
 #include "../common/error_handler/error_handler.hpp"
+
+
+volatile sig_atomic_t running = 1; //globalna flaga running (krolowa)                    SIGUSR1
+volatile sig_atomic_t close_simulation = 0; //globalna flaga close (zamykanie symulacji) SIGUSR2
 
 
 struct EggData
@@ -147,6 +153,9 @@ int read_line(int fd, char* buffer, int* buf_len, char* line, int line_size) {
             return 0;   // EOF
         }
         else if (errno == EINTR) {
+            if (!running) {
+                return -2; // przerwano odczyt przez sygnał
+            }
             continue;
         }
         else {
@@ -221,16 +230,40 @@ void send_to_anthill(int fd, const char* text) {
     }
 }
 
+void sig_handler1(int sig){
+    running = 0;
+}
+void sig_handler2(int sig){
+    close_simulation = 1;
+}
+
 
 int main(int argc, char* argv[]) {
-    if (argc < 4) {
+    if (argc < 5) {
         Error(ErrorType::ERROR_ARGUMENT, ErrorSource::SOURCE_ANT_QUEEN,
         "Blad przekazywanych danych z main do Ant_Queen",errno);
         return 1;
     }
+
+    //SIGUSR1
+    struct sigaction sig1 = {0};
+    struct sigaction sig2 = {0};
+    
+    sig1.sa_handler = sig_handler1;
+    sig2.sa_handler = sig_handler2;
+
+    sigemptyset(&sig1.sa_mask);
+    sigemptyset(&sig2.sa_mask);
+    sigaction(SIGUSR1, &sig1, NULL);
+    sigaction(SIGUSR2, &sig2, NULL);
+
+
+
+
     int queenReadFd = atoi(argv[1]);
     int antWriteFd  = atoi(argv[2]);      // tylko dla Ant_born (stdout mrowek)
     int outWriteFd  = atoi(argv[3]);      // komunikaty krolowej do main
+    pid_t pgid = atoi(argv[4]);           //grupa mrowek
 
     char buffer[MSG_BUF_SIZE];
     int buf_len = 0;
@@ -245,89 +278,105 @@ int main(int argc, char* argv[]) {
     int laid_seen = 0;   // z komunikatu main
 
 
-
     std::vector<EggData> egg_data;
 
-    bool running = true;
-    while (running) {
 
-        // czekaj maksymalnie 500 ms na dane od main
-        struct pollfd pfd;
-        pfd.fd = queenReadFd;
-        pfd.events = POLLIN;
-        pfd.revents = 0;
-        int ret = poll(&pfd, 1, 500);
+    //glowna petla programu
+    while (!close_simulation){
+        while (running) {
+            if(close_simulation == 1){
+                running = false;
+                break;
+            }
+            
+            // czekaj maksymalnie 500 ms na dane od main
+            struct pollfd pfd;
+            pfd.fd = queenReadFd;
+            pfd.events = POLLIN;
+            pfd.revents = 0;
+            int ret = poll(&pfd, 1, 500);
 
-        if (ret > 0) {
-            int r = read_line(queenReadFd, buffer, &buf_len, line, sizeof(line));
-            if (r == 1) {
-                parse_message(line, &population, &granary_volume, &food, &max_population, &laid_seen);
+            if (ret > 0) {
+                int r = read_line(queenReadFd, buffer, &buf_len, line, sizeof(line));
+                if (r == -2) {
+                    running = 0;
+                }
+                if (r == 1) {
+                    parse_message(line, &population, &granary_volume, &food, &max_population, &laid_seen);
 
-                // wyczerp pozostale pelne linie - zostaje najnowszy stan
-                while (memchr(buffer, '\n', buf_len) != NULL) {
-                    if (read_line(queenReadFd, buffer, &buf_len, line, sizeof(line)) == 1) {
-                        parse_message(line, &population, &granary_volume, &food, &max_population, &laid_seen);
+                    // wyczerp pozostale pelne linie - zostaje najnowszy stan
+                    while (memchr(buffer, '\n', buf_len) != NULL) {
+                        if (read_line(queenReadFd, buffer, &buf_len, line, sizeof(line)) == 1) {
+                            parse_message(line, &population, &granary_volume, &food, &max_population, &laid_seen);
+                        }
                     }
                 }
+                else if (r == 0) {
+                    running = false;
+                }
             }
-            else if (r == 0) {
-                running = false;
+            else if (ret == 0) {
+                // cisza przez 500 ms - daj znac main, ze zyjemy
+                // (main odpowie wtedy swoim stanem)
+                send_to_anthill(outWriteFd, "QUEEN_ALIVE\n");
             }
-        }
-        else if (ret == 0) {
-            // cisza przez 500 ms - daj znac main, ze zyjemy
-            // (main odpowie wtedy swoim stanem)
-            send_to_anthill(outWriteFd, "QUEEN_ALIVE\n");
-        }
-        else if (ret == -1) {
-            if (errno == EINTR) {
+            else if (ret == -1) {
+                if (errno == EINTR) {
+                    continue;
+                }
+
+                Error(
+                    ErrorType::ERROR_POLL,
+                    ErrorSource::SOURCE_ANT_QUEEN,
+                    "Blad oczekiwania na dane z potoku",
+                    errno
+                );
                 continue;
             }
 
-            Error(
-                ErrorType::ERROR_POLL,
-                ErrorSource::SOURCE_ANT_QUEEN,
-                "Blad oczekiwania na dane z potoku",
-                errno
-            );
-            continue;
-        }
+            // zlozenie jaja: jest miejsce w wylegarni, miejsce w populacji i jedzenie
+            // (food_effective uwzglednia jaja, o ktorych main jeszcze nie wie)
+            int food_effective = food - 10 * (num_of_egg - laid_seen);
 
-        // zlozenie jaja: jest miejsce w wylegarni, miejsce w populacji i jedzenie
-        // (food_effective uwzglednia jaja, o ktorych main jeszcze nie wie)
-        int food_effective = food - 10 * (num_of_egg - laid_seen);
-
-        if ((int)egg_data.size() < granary_volume
-            && population < max_population
-            && food_effective >= 10) {
-            egg_data.push_back(egg_incubator(num_of_egg));
-            num_of_egg++;
-            send_to_anthill(outWriteFd, "EGG_LAID\n");
-        }
-        // sprawdzenie, czy jakies jajo sie wykluło
-        for (size_t i = 0; i < egg_data.size(); ) {
-            if (egg_ready(egg_data[i], 30)) {
-                pid_t antPid = Ant_born(egg_data[i].id, antWriteFd);
-                if (antPid != -1) {
-                    egg_data.erase(egg_data.begin() + i);
-                    send_to_anthill(outWriteFd, "EGG_HATCHED\n");
+            if ((int)egg_data.size() < granary_volume
+                && population < max_population
+                && food_effective >= 10) {
+                egg_data.push_back(egg_incubator(num_of_egg));
+                num_of_egg++;
+                send_to_anthill(outWriteFd, "EGG_LAID\n");
+            }
+            // sprawdzenie, czy jakies jajko sie wyklulo
+            for (size_t i = 0; i < egg_data.size(); ) {
+                if (egg_ready(egg_data[i], 30)) {
+                    pid_t antPid = Ant_born(egg_data[i].id, antWriteFd);
+                    setpgid(antPid, pgid);
+                    if (antPid != -1) {
+                        egg_data.erase(egg_data.begin() + i);
+                        send_to_anthill(outWriteFd, "EGG_HATCHED\n");
+                    }
+                    else {
+                        i++;
+                    }
                 }
                 else {
                     i++;
                 }
             }
-            else {
-                i++;
-            }
+
+            // posprzataj zakonczone procesy mrowek (zeby nie zostawaly zombie)
+            pid_t result = waitpid(-1, NULL, WNOHANG);
+
+            if (result == -1 && errno != EINTR && errno != ECHILD) {
+                Error(ErrorType::ERROR_WAITPID, ErrorSource::SOURCE_ANT_QUEEN,
+                    "Blad waitpid czyszczacy procesy mrowek", errno );
+            }   
         }
-
-        // posprzataj zakonczone procesy mrowek (zeby nie zostawaly zombie)
-        pid_t result = waitpid(-1, NULL, WNOHANG);
-
-        if (result == -1 && errno != EINTR && errno != ECHILD) {
-            Error(ErrorType::ERROR_WAITPID, ErrorSource::SOURCE_ANT_QUEEN,
-                "Blad waitpid czyszczacy procesy mrowek", errno );
-        }   
     }
+
+    kill(-pgid, SIGUSR2); //sygnal zakonczenia pracy dla wszystkich procesow z grupy pgid (mrowki)
+
+    while (waitpid(-pgid, nullptr, 0) > 0) {}
+
+    send_to_anthill(outWriteFd, "QUEEN_DEAD\n");
     return 0;
 }

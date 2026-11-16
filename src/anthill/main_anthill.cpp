@@ -9,20 +9,21 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
-#include "../common/error_handler/error_handler.hpp"
-
 #include <cstdio>
 #include <ctime>
 #include <initializer_list>
 
 #include <poll.h>
+#include <signal.h> //sigusr
+
+#include "../common/error_handler/error_handler.hpp"
 
 
 std::string ExeDir();
 
 int CreatePipe(int (&pipeFd)[2]);
 
-pid_t Queen_born(int readFd, int writeFd, int antWriteFd, int antPipeReadFd, int outReadFd, int outWriteFd);
+pid_t Queen_born(int readFd, int writeFd, int antWriteFd, int antPipeReadFd, int outReadFd, int outWriteFd, pid_t pgid);
 pid_t Ant_born(int i, int antPipe[2]);
 pid_t StartTui(int readFd, int writeFd, int commandReadFd, int commandWriteFd);
 
@@ -35,14 +36,20 @@ void event_to_tui(int tuiWriteFd, const std::string& event);
 void condition_to_tui(int tuiWriteFd, int queen, int pop, int gran, int food, int eggs, int tun);
 void message_to_queen(int population, int granary_volume, int food, int max_population, int queenWriteFd, int laid_seen);
 
-std::string messageFromQueen(char buffer[256], std::string& pending, ssize_t bytesRead, int& food, int& eggs,int& laid_seen);
+void close_simulation();
+
+std::string messageFromQueen(char buffer[256], std::string& pending, ssize_t bytesRead, int& food, int& eggs,int& laid_seen, bool& is_queen_alive);
 std::string messageFromAnt(char buffer[256], std::string& pending, ssize_t bytesRead, int& population, int& food);
+std::string messageFromTui(char buffer[256],std::string& pending, ssize_t bytesRead, bool& running, pid_t queenPid);
 
-void messageFromTui(char buffer[256],std::string& pending, ssize_t bytesRead, bool& running);
-
-
-
-
+void sig_handler1(int sig){
+    //dorobic obsluge rozbudowy mrowiska dwukrotnie
+    return;
+}
+void sig_handler2(int sig){
+    //dorobic obsluge zmniejszenia mrowiska o polowe
+    return;
+}
 //--------------------------( MAIN )------------------------------------//
 int main() {
     // zmienne
@@ -67,7 +74,17 @@ int main() {
     bool running = true;
     int pollResult;
     int laid_seen = 0;   // ile EGG_LAID main juz przetworzyl
+    pid_t pgid = 0; // grupa pgid
 
+    //SIGUSR1 i SIGUSR2
+    struct sigaction sig1 = {0};
+    struct sigaction sig2 = {0};
+    sig1.sa_handler = sig_handler1;
+    sig2.sa_handler = sig_handler2;
+    sigemptyset(&sig1.sa_mask);
+    sigemptyset(&sig2.sa_mask);
+    sigaction(SIGUSR1, &sig1, NULL);
+    sigaction(SIGUSR2, &sig2, NULL);
 
 
     //------------otwarcie pliku do zapisu logow----------------//
@@ -144,12 +161,27 @@ int main() {
 
     std::vector<pid_t> processes;
 
+
+    // Utworzenie początkowych procesów mrówek
+    for (int i = 1; i <= start; ++i) {
+        pid_t pid = Ant_born(i, antPipe);
+        if (pid == -1) {
+            continue;
+        }
+        if (pgid == 0) {
+            pgid = pid; // pierwszy proces zostaje liderem
+        }
+        if (setpgid(pid, pgid) == -1) {
+            perror("setpgid");
+        }
+        processes.push_back(pid);
+    }
+
     // Utworzenie procesu krolowej
-    pid_t queenPid = Queen_born(queenPipe[0], queenPipe[1], antPipe[1], antPipe[0], queenOutPipe[0], queenOutPipe[1]);
+    pid_t queenPid = Queen_born(queenPipe[0], queenPipe[1], antPipe[1], antPipe[0], queenOutPipe[0], queenOutPipe[1], pgid);
     close(queenPipe[0]);
     close(queenOutPipe[1]);   // main tylko czyta od krolowej
-    
-    if (queenPid == -1) {
+        if (queenPid == -1) {
         close(antPipe[0]);
         close(antPipe[1]);
         close(tuiPipe[0]);
@@ -160,15 +192,6 @@ int main() {
     else{
         is_queen_alive = true;
     }
-    // Utworzenie poczatkowych procesow mrowek w ilosci start
-    for (int i = 1; i <= start; ++i) {
-        pid_t pid = Ant_born(i, antPipe);
-        if (pid == -1) {
-            continue;
-        }
-        processes.push_back(pid);
-    }
-
 
     // main nie zapisuje bezposrednio do antPipe
     close(antPipe[1]);
@@ -235,7 +258,7 @@ int main() {
                     case 1: {
                         ssize_t bytesReadQueen = read(queenOutPipe[0], bufferQueen, sizeof(bufferQueen) - 1 );
                         if (bytesReadQueen > 0) {
-                            messageQueen = messageFromQueen(bufferQueen,pendingQueen,bytesReadQueen,food,eggs,laid_seen);
+                            messageQueen = messageFromQueen(bufferQueen,pendingQueen,bytesReadQueen,food,eggs,laid_seen, is_queen_alive);
                         }
                         break;
                     }
@@ -244,7 +267,7 @@ int main() {
                     case 2: {
                         ssize_t bytesReadTui = read(tuiToMain[0], bufferTui, sizeof(bufferTui) - 1);
                         if (bytesReadTui > 0) {
-                            messageFromTui(bufferTui, pendingTui, bytesReadTui, running) ;
+                            messageFromTui(bufferTui, pendingTui, bytesReadTui, running, queenPid) ;
                         }
                         break;
                     }   
@@ -294,7 +317,7 @@ int main() {
             else {
                 //obsluga bledu
                 Error(ErrorType::ERROR_WRITE, ErrorSource::SOURCE_MAIN_ANTHILL,
-                "Blad przekazywania ostatniego komunikatu do TUI");
+                "Blad przekazywania ostatniego komunikatu do TUI",errno);
             }
         }
     }
@@ -315,7 +338,7 @@ int main() {
             }
             //obsluga bledu
             Error(ErrorType::ERROR_WAITPID, ErrorSource::SOURCE_MAIN_ANTHILL,
-            "Blad waitpid dla Ant");
+            "Blad waitpid dla Ant",errno);
             break;
         }
     }
@@ -328,25 +351,20 @@ int main() {
         }
         //obsluga bledu
         Error(ErrorType::ERROR_WAITPID, ErrorSource::SOURCE_MAIN_ANTHILL,
-        "Blad waitpid dla TUI");
+        "Blad waitpid dla TUI",errno);
         break;
     }
 
 
-    std::cout << "Wszystkie procesy zakonczone.\n";
 
+
+
+
+
+    std::cout << "Wszystkie procesy zakonczone.\n";
     fclose(fileLog);
     return 0;
 }
-
-
-
-
-
-
-
-
-
 
 
 
@@ -361,7 +379,7 @@ std::string ExeDir() {
     //obsluga bledu
     if (len == -1) {
         Error(ErrorType::ERROR_READ, ErrorSource::SOURCE_MAIN_ANTHILL, 
-        "Blad odczytu sciezki programu");
+        "Blad odczytu sciezki programu",errno);
         return ".";
     }
     path[len] = '\0';
@@ -415,7 +433,7 @@ int CreatePipe(int (&pipeFd)[2]) {
     //obsluga bledu
     if (pipe(pipeFd) == -1) {
         Error(ErrorType::ERROR_PIPE, ErrorSource::SOURCE_MAIN_ANTHILL,
-        "blad utworzenia pipe");
+        "blad utworzenia pipe",errno);
         return -1;
     }
     return 0;
@@ -425,13 +443,13 @@ int CreatePipe(int (&pipeFd)[2]) {
 
 
 //----------------------(tworzenie procesu krolowej)-------------------//
-pid_t Queen_born(int readFd, int writeFd, int antWriteFd, int antPipeReadFd,int outReadFd, int outWriteFd) {
+pid_t Queen_born(int readFd, int writeFd, int antWriteFd, int antPipeReadFd,int outReadFd, int outWriteFd, pid_t pgid) {
     pid_t pid = fork();
 
     //obsluga bledu
     if (pid == -1) { 
         Error(ErrorType::ERROR_FORK, ErrorSource::SOURCE_MAIN_ANTHILL, 
-        "Blad uruchomienia procesu Queen"); 
+        "Blad uruchomienia procesu Queen",errno); 
         return -1;
     }
 
@@ -442,13 +460,16 @@ pid_t Queen_born(int readFd, int writeFd, int antWriteFd, int antPipeReadFd,int 
         std::string fd = std::to_string(readFd);
         std::string antFd = std::to_string(antWriteFd);
         std::string outFd = std::to_string(outWriteFd);
-
+        std::string pgidStr = std::to_string(pgid);
         std::string path = ExeDir() + "/ant_queen";
 
-        execl(path.c_str(), "ant_queen", fd.c_str(), antFd.c_str(), outFd.c_str(), static_cast<char*>(nullptr));
-        
+        execl(path.c_str(), "ant_queen",
+            fd.c_str(), antFd.c_str(), outFd.c_str(),
+            pgidStr.c_str(),
+            static_cast<char*>(nullptr));
+
         Error(ErrorType::ERROR_EXEC, ErrorSource::SOURCE_MAIN_ANTHILL,
-        "Blad uruchomienia ant_queen");
+        "Blad uruchomienia ant_queen",errno);
         _exit(1);
     }
 
@@ -531,7 +552,7 @@ pid_t StartTui(int readFd, int writeFd, int commandReadFd, int commandWriteFd) {
 }
 
 
-std::string messageFromQueen(char buffer[256], std::string& pending, ssize_t bytesRead, int& food, int& eggs, int& laid_seen){
+std::string messageFromQueen(char buffer[256], std::string& pending, ssize_t bytesRead, int& food, int& eggs, int& laid_seen, bool& is_queen_alive){
     std::string events;
 
     pending.append(buffer, bytesRead);
@@ -553,6 +574,9 @@ std::string messageFromQueen(char buffer[256], std::string& pending, ssize_t byt
         }
         else if (type == "EGG_HATCHED") {
             eggs--;
+        }
+        else if (type == "QUEEN_DEAD") {
+            is_queen_alive = false;
         }
         events += event + "\n";
     }
@@ -600,9 +624,10 @@ std::string messageFromAnt(char buffer[256], std::string& pending, ssize_t bytes
 
 
 
-void messageFromTui(char buffer[256],std::string& pending, ssize_t bytesRead, bool& running){
+std::string messageFromTui(char buffer[256],std::string& pending, ssize_t bytesRead, bool& running, pid_t queenPid){
+    std::string events;
+    
     pending.append(buffer, bytesRead);
-
     std::size_t pos;
 
     while ((pos = pending.find('\n')) != std::string::npos) {
@@ -614,11 +639,17 @@ void messageFromTui(char buffer[256],std::string& pending, ssize_t bytesRead, bo
 
         
         if (typeTui == "QUIT") {
-            running = false;
-            return;
+            //zatrzymanie symulacji zapoczatkowane sygnalem sigusr2 do procesow potomnych ant_queen i tui
+            if (kill(queenPid, SIGUSR2) == -1) { 
+                perror("kill SIGUSR2");
+            }
+            close_simulation();
         }
         else if (typeTui == "QUEEN_KILL") {
-            //
+            //sigusr1 dla ant_queen oznacza zatrzymanie procesu ant_queen
+            if (kill(queenPid, SIGUSR1) == -1) { 
+                perror("kill SIGUSR1");
+            }
         }
         else if (typeTui == "ANT_KILL") {
             int number;
@@ -636,6 +667,7 @@ void messageFromTui(char buffer[256],std::string& pending, ssize_t bytesRead, bo
             //
         }
     }
+    return events;
 }
 
 
@@ -735,4 +767,20 @@ void message_to_queen(int population, int granary_volume,
             break;
         }
     }
+}
+
+
+void close_simulation(){
+
+    //najpierw wyslany sygnal zakonczenia symulacji do procesu ant_queen i do tui
+
+    //odbior z ant_queen informacji o zatrzymaniu procesow mrowek i tworzeniu nowych procesow
+    //zakonczenie procesow mrowek
+    //zamkniecie potokow komunikacji z mrowkami
+    //zatrzymanie procesu ant_queen
+    //zakonczenie procesu ant_queen
+    //zamkniecie potoku komunikacji z ant_queen
+    //wyslanie informacji do tui o zakonczeniu symulacji
+    //
+
 }

@@ -6,6 +6,11 @@
 
 #include "../common/error_handler/error_handler.hpp"
 
+
+#include <signal.h> //sigusr
+
+volatile sig_atomic_t stop = 0; //flaga zakonczenia programu (SIGUSR2)
+
 using namespace std;
 using namespace std::this_thread;
 using namespace std::chrono;
@@ -70,15 +75,34 @@ std::string random_ant_name(std::mt19937& gen) {
 int ant_foraging(std::mt19937& gen) {
     int k = random_generator(gen, 1, 4); //losowosc znalezienia
     int time = random_generator(gen, 3,10); //losowosc czasu szukania
-    sleep_for(seconds(time)); //czekaj time sekund
-    if (k % 4 == 0) {
-        return 1; // znaleziono pozywienie
+    struct timespec req = {time, 0};
+    nanosleep(&req, nullptr); //czekaj time sekund (nanosleep pozwala zatrzymac sen w przypadku SIGUSR2)
+    if (!stop){ //sprawdzenie flagi (SIGUSR2)
+        if (k % 4 == 0) {
+            return 1; // znaleziono pozywienie
+        }
+        return 0; // nie znaleziono pozywienia
     }
-    return 0; // nie znaleziono pozywienia
+    return 0;
+}
+
+void sig_handler2(int sig){
+    if (sig == SIGUSR2) {
+        stop = 1;
+    }
 }
 
 
+
+
 int main(int argc, char* argv[]) {
+    //SIGUSR2 konczace proces
+    struct sigaction sig2 = {0};
+    sig2.sa_handler = sig_handler2;
+    sigemptyset(&sig2.sa_mask);
+    sigaction(SIGUSR2, &sig2, NULL);
+
+
     std::random_device rd;
     std::mt19937 gen(rd());
 
@@ -98,6 +122,11 @@ int main(int argc, char* argv[]) {
     //poszukiwanie jedzenia az do smierci
     while (ant.ant_lifetime > 0) {
         int found = ant_foraging(gen);
+        if (stop){ //jesli SIGUSR2 ustawi stop na 1, zakonczy program
+            // Komunikat dla procesu nadrzednego przez stdout.
+            cout << "ANT_DEAD " << ant.ant_name << '\n' << flush;
+            return 0;
+        }
 
         if (found == 1) {
             // Komunikat dla procesu nadrzednego przez stdout.
@@ -110,5 +139,6 @@ int main(int argc, char* argv[]) {
         cout << "ANT_DEAD " << ant.ant_name << '\n' << flush;
         return 0;
     }
+
     return 1;
 }
