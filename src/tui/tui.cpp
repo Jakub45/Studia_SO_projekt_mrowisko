@@ -244,18 +244,16 @@ int main(int argc, char* argv[]) {
 
 
         //jesli zakonczenie zostanie zainicjowane
-        if (close_simulation || eggs){
-            if(!queen_alive && ant_population == 0){                  
-                terminal_lines.push_back("simulation closed for 5 seconds");
-                werase(win_terminal);
-                box(win_terminal, 0, 0);
-                draw_lines(terminal_text, terminal_lines, getmaxy(terminal_text) - 1);
-                wrefresh(win_terminal);
+        if (close_simulation ){                
+            terminal_lines.push_back("simulation closed for 5 seconds");
+            werase(win_terminal);
+            box(win_terminal, 0, 0);
+            draw_lines(terminal_text, terminal_lines, getmaxy(terminal_text) - 1);
+            wrefresh(win_terminal);
 
-                sleep(5);
-                running = false;
-                break;
-            }
+            sleep(5);
+            running = false;
+            break;
         }
 
         // Klawisze.
