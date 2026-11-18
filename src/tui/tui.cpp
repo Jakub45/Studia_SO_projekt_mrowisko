@@ -10,6 +10,20 @@
 #include <cstring>  // strncpy, strtok
 #include <iostream> //flush
 
+#include <signal.h> //sigusr
+volatile sig_atomic_t close_simulation = 0; //globalna flaga close (zamykanie symulacji) SIGUSR2
+
+void sig_handler1(int sig){
+    return;
+    //pusty
+}
+void sig_handler2(int sig){
+    //SIGUSR2
+    close_simulation = 1;
+}
+
+
+
 //-( Wypisuje ostatnie "rows" linii z historii (starsze sie przewijaja). )-------//
 void draw_lines(WINDOW* w, const std::vector<std::string>& lines, int rows) {
     int width = getmaxx(w);
@@ -41,6 +55,18 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
+    //SIGUSR1 i SIGUSR2
+    struct sigaction sig1 = {0};
+    struct sigaction sig2 = {0};
+    sig1.sa_handler = sig_handler1;
+    sig2.sa_handler = sig_handler2;
+    sigemptyset(&sig1.sa_mask);
+    sigemptyset(&sig2.sa_mask);
+    sigaction(SIGUSR1, &sig1, NULL);
+    sigaction(SIGUSR2, &sig2, NULL);
+
+
+
     int readFd = atoi(argv[1]);
     int cmdFd = atoi(argv[2]);
 
@@ -86,8 +112,8 @@ int main(int argc, char* argv[]) {
     std::string input;                         // wpisywany tekst
 
     // Wartosci KINGDOM CONDITION (docelowo beda przychodzic z maina).
-    bool queen_alive;
-    int ant_population;
+    bool queen_alive = true;
+    int ant_population = 0;
     int granary_volume;
     int food;
     int eggs;
@@ -99,6 +125,8 @@ int main(int argc, char* argv[]) {
     
     bool running = true;
     while (running) {
+
+
         // Odbierz dane z main (czytaj az do opróżnienia pipe'a).
         ssize_t n;
         while ((n = read(readFd, buffer, sizeof(buffer))) > 0) {
@@ -154,6 +182,7 @@ int main(int argc, char* argv[]) {
                 terminal_lines.push_back(type + ": command not found");
             }
         }
+
 
         // Rysowanie.
         werase(win_event);
@@ -211,6 +240,23 @@ int main(int argc, char* argv[]) {
         wrefresh(win_info);
         wrefresh(win_kingdom);
         wrefresh(win_terminal);       // ostatni, zeby kursor zostal w terminalu
+
+
+
+        //jesli zakonczenie zostanie zainicjowane
+        if (close_simulation || eggs){
+            if(!queen_alive && ant_population == 0){                  
+                terminal_lines.push_back("simulation closed for 5 seconds");
+                werase(win_terminal);
+                box(win_terminal, 0, 0);
+                draw_lines(terminal_text, terminal_lines, getmaxy(terminal_text) - 1);
+                wrefresh(win_terminal);
+
+                sleep(5);
+                running = false;
+                break;
+            }
+        }
 
         // Klawisze.
         int key = wgetch(terminal_text);

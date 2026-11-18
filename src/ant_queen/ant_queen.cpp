@@ -375,7 +375,7 @@ int main(int argc, char* argv[]) {
 
     kill(-pgid, SIGUSR2); //sygnal zakonczenia pracy dla wszystkich procesow z grupy pgid (mrowki)
 
-    while (waitpid(-pgid, nullptr, 0) > 0) {}
+    while (waitpid(-pgid, nullptr, 0) > 0) {} // czekaj na zakonczenie procesow potomnych
 
     send_to_anthill(outWriteFd, "QUEEN_DEAD\n");
     return 0;

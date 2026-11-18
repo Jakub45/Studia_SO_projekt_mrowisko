@@ -36,11 +36,10 @@ void event_to_tui(int tuiWriteFd, const std::string& event);
 void condition_to_tui(int tuiWriteFd, int queen, int pop, int gran, int food, int eggs, int tun);
 void message_to_queen(int population, int granary_volume, int food, int max_population, int queenWriteFd, int laid_seen);
 
-void close_simulation();
 
 std::string messageFromQueen(char buffer[256], std::string& pending, ssize_t bytesRead, int& food, int& eggs,int& laid_seen, bool& is_queen_alive);
 std::string messageFromAnt(char buffer[256], std::string& pending, ssize_t bytesRead, int& population, int& food);
-std::string messageFromTui(char buffer[256],std::string& pending, ssize_t bytesRead, bool& running, pid_t queenPid);
+std::string messageFromTui(char buffer[256],std::string& pending, ssize_t bytesRead, bool& running, pid_t queenPid, pid_t tuiPid);
 
 void sig_handler1(int sig){
     //dorobic obsluge rozbudowy mrowiska dwukrotnie
@@ -74,7 +73,7 @@ int main() {
     bool running = true;
     int pollResult;
     int laid_seen = 0;   // ile EGG_LAID main juz przetworzyl
-    pid_t pgid = 0; // grupa pgid
+    pid_t pgid = 0; // grupa pgid (mrowki)
 
     //SIGUSR1 i SIGUSR2
     struct sigaction sig1 = {0};
@@ -208,8 +207,21 @@ int main() {
     std::string pendingEnvironment;
 
     //glowna petla programu
-
     while (running) {
+
+        //zamykanie symulacji
+        if (waitpid(-pgid, nullptr, WNOHANG)){ //jesli grupa mrowek zakonczyla dzialanie
+            if (waitpid(queenPid, nullptr, WNOHANG)){ //jesli krolowa zakonczyla dzialanie
+                if (kill(tuiPid, SIGUSR2) == -1) { 
+                    perror("kill SIGUSR2");
+                }
+                if (waitpid(tuiPid, nullptr, WNOHANG)){ //jesli tui zakonczylo dzialanie
+                    running = false;
+                    break;
+                }
+            }
+        } 
+
         std::string messageAnt;
         std::string messageQueen;
 
@@ -267,7 +279,7 @@ int main() {
                     case 2: {
                         ssize_t bytesReadTui = read(tuiToMain[0], bufferTui, sizeof(bufferTui) - 1);
                         if (bytesReadTui > 0) {
-                            messageFromTui(bufferTui, pendingTui, bytesReadTui, running, queenPid) ;
+                            messageFromTui(bufferTui, pendingTui, bytesReadTui, running, queenPid, tuiPid) ;
                         }
                         break;
                     }   
@@ -484,7 +496,7 @@ pid_t Ant_born(int i, int antPipe[2]) {
     //obsluga bledu
     if (pid == -1) { 
         Error(ErrorType::ERROR_FORK, ErrorSource::SOURCE_MAIN_ANTHILL, 
-        "Blad tworzenia procesu Ant"); 
+        "Blad tworzenia procesu Ant",errno); 
         return -1;
     }
 
@@ -495,7 +507,7 @@ pid_t Ant_born(int i, int antPipe[2]) {
         //obsluga bledu
         if (dup2(antPipe[1], STDOUT_FILENO) == -1) {
             Error(ErrorType::ERROR_DUP2, ErrorSource::SOURCE_MAIN_ANTHILL,
-            "Blad przekierowania STDOUT procesu Ant");
+            "Blad przekierowania STDOUT procesu Ant",errno);
             _exit(static_cast<int>(ErrorType::ERROR_DUP2));
         }
 
@@ -510,7 +522,7 @@ pid_t Ant_born(int i, int antPipe[2]) {
 
         //obsluga bledu
         Error(ErrorType::ERROR_EXEC, ErrorSource::SOURCE_MAIN_ANTHILL,
-        "Blad uruchomienia pliku wykonywalnego ant");
+        "Blad uruchomienia pliku wykonywalnego ant",errno);
         _exit(static_cast<int>(ErrorType::ERROR_EXEC));
     }
     return pid;
@@ -524,7 +536,7 @@ pid_t StartTui(int readFd, int writeFd, int commandReadFd, int commandWriteFd) {
     if (pid == -1) {
         Error(ErrorType::ERROR_FORK,
               ErrorSource::SOURCE_MAIN_ANTHILL,
-              "Blad uruchomienia procesu TUI");
+              "Blad uruchomienia procesu TUI",errno);
         return -1;
     }
 
@@ -543,7 +555,7 @@ pid_t StartTui(int readFd, int writeFd, int commandReadFd, int commandWriteFd) {
               static_cast<char*>(nullptr));
 
         Error(ErrorType::ERROR_EXEC,ErrorSource::SOURCE_MAIN_ANTHILL,
-              "Blad uruchamiania TUI");
+              "Blad uruchamiania TUI",errno);
 
         _exit(1);
     }
@@ -624,7 +636,7 @@ std::string messageFromAnt(char buffer[256], std::string& pending, ssize_t bytes
 
 
 
-std::string messageFromTui(char buffer[256],std::string& pending, ssize_t bytesRead, bool& running, pid_t queenPid){
+std::string messageFromTui(char buffer[256],std::string& pending, ssize_t bytesRead, bool& running, pid_t queenPid, pid_t tuiPid){
     std::string events;
     
     pending.append(buffer, bytesRead);
@@ -643,7 +655,6 @@ std::string messageFromTui(char buffer[256],std::string& pending, ssize_t bytesR
             if (kill(queenPid, SIGUSR2) == -1) { 
                 perror("kill SIGUSR2");
             }
-            close_simulation();
         }
         else if (typeTui == "QUEEN_KILL") {
             //sigusr1 dla ant_queen oznacza zatrzymanie procesu ant_queen
@@ -693,7 +704,7 @@ void event_to_tui(int tuiWriteFd, const std::string& event) {
         }
         else {
             Error(ErrorType::ERROR_WRITE, ErrorSource::SOURCE_MAIN_ANTHILL,
-            "Blad wysylania danych event do TUI");
+            "Blad wysylania danych event do TUI",errno);
             break;
         }
     }
@@ -729,7 +740,7 @@ void condition_to_tui(int tuiWriteFd, int queen, int pop,
         else {
             //obsluga bledu
             Error(ErrorType::ERROR_WRITE, ErrorSource::SOURCE_MAIN_ANTHILL,
-            "Blad wysylania danych condition do TUI");
+            "Blad wysylania danych condition do TUI",errno);
             break;
         }
     }
@@ -763,24 +774,8 @@ void message_to_queen(int population, int granary_volume,
         else {
             //obsluga bledu
             Error(ErrorType::ERROR_WRITE, ErrorSource::SOURCE_MAIN_ANTHILL,
-            "Blad wysylania danych do procesu queen");
+            "Blad wysylania danych do procesu queen",errno);
             break;
         }
     }
-}
-
-
-void close_simulation(){
-
-    //najpierw wyslany sygnal zakonczenia symulacji do procesu ant_queen i do tui
-
-    //odbior z ant_queen informacji o zatrzymaniu procesow mrowek i tworzeniu nowych procesow
-    //zakonczenie procesow mrowek
-    //zamkniecie potokow komunikacji z mrowkami
-    //zatrzymanie procesu ant_queen
-    //zakonczenie procesu ant_queen
-    //zamkniecie potoku komunikacji z ant_queen
-    //wyslanie informacji do tui o zakonczeniu symulacji
-    //
-
 }
