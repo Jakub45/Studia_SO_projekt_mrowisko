@@ -18,6 +18,10 @@
 
 #include "../common/error_handler/error_handler.hpp"
 
+bool shutdown_started = false;
+bool ants_finished = false;
+bool queen_finished = false;
+bool tui_finished = false;
 
 std::string ExeDir();
 
@@ -36,16 +40,19 @@ void event_to_tui(int tuiWriteFd, const std::string& event);
 void condition_to_tui(int tuiWriteFd, int queen, int pop, int gran, int food, int eggs, int tun);
 void message_to_queen(int population, int granary_volume, int food, int max_population, int queenWriteFd, int laid_seen);
 
+void close_simulation(pid_t pgid, pid_t queenPid, pid_t tuiPid,std::vector<pid_t> processes);
 
 std::string messageFromQueen(char buffer[256], std::string& pending, ssize_t bytesRead, int& food, int& eggs,int& laid_seen, bool& is_queen_alive);
 std::string messageFromAnt(char buffer[256], std::string& pending, ssize_t bytesRead, int& population, int& food);
-std::string messageFromTui(char buffer[256],std::string& pending, ssize_t bytesRead, bool& running, pid_t queenPid, pid_t tuiPid);
+std::string messageFromTui(char buffer[256],std::string& pending, ssize_t bytesRead, pid_t queenPid, pid_t tuiPid, pid_t pgid);
 
 void sig_handler1(int sig){
+    (void)sig; //zeby uciszyc kompilator
     //dorobic obsluge rozbudowy mrowiska dwukrotnie
     return;
 }
 void sig_handler2(int sig){
+    (void)sig; //zeby uciszyc kompilator
     //dorobic obsluge zmniejszenia mrowiska o polowe
     return;
 }
@@ -76,8 +83,8 @@ int main() {
     pid_t pgid = 0; // grupa pgid (mrowki)
 
     //SIGUSR1 i SIGUSR2
-    struct sigaction sig1 = {0};
-    struct sigaction sig2 = {0};
+    struct sigaction sig1 = {};
+    struct sigaction sig2 = {};
     sig1.sa_handler = sig_handler1;
     sig2.sa_handler = sig_handler2;
     sigemptyset(&sig1.sa_mask);
@@ -199,7 +206,6 @@ int main() {
     char bufferAnt[256];
     char bufferQueen[256];
     char bufferTui[256];
-    char bufferEnvironment[256];
     
     std::string pendingAnt;
     std::string pendingQueen;
@@ -208,19 +214,6 @@ int main() {
 
     //glowna petla programu
     while (running) {
-
-        //zamykanie symulacji
-        if (waitpid(-pgid, nullptr, WNOHANG)){ //jesli grupa mrowek zakonczyla dzialanie
-            if (waitpid(queenPid, nullptr, WNOHANG)){ //jesli krolowa zakonczyla dzialanie
-                if (kill(tuiPid, SIGUSR2) == -1) { 
-                    perror("kill SIGUSR2");
-                }
-                if (waitpid(tuiPid, nullptr, WNOHANG)){ //jesli tui zakonczylo dzialanie
-                    running = false;
-                    break;
-                }
-            }
-        } 
 
         std::string messageAnt;
         std::string messageQueen;
@@ -239,13 +232,10 @@ int main() {
         // Wiadomosc do krolowej
         message_to_queen(population, granary_volume, food, max_population, queenPipe[1], laid_seen);
 
-        // Aktualizacja stanu do TUI
-        condition_to_tui(tuiPipe[1], is_queen_alive, population, granary_volume, food, eggs, num_of_tun);
-
 
 
         do {
-            pollResult = poll(potoki, 3, -1);
+            pollResult = poll(potoki, 3, 100);
         } while (pollResult == -1 && errno == EINTR);
 
         if (pollResult == -1) {
@@ -279,7 +269,7 @@ int main() {
                     case 2: {
                         ssize_t bytesReadTui = read(tuiToMain[0], bufferTui, sizeof(bufferTui) - 1);
                         if (bytesReadTui > 0) {
-                            messageFromTui(bufferTui, pendingTui, bytesReadTui, running, queenPid, tuiPid) ;
+                            messageFromTui(bufferTui, pendingTui, bytesReadTui, queenPid,tuiPid, pgid) ;
                         }
                         break;
                     }   
@@ -302,6 +292,22 @@ int main() {
 
             event_to_tui(tuiPipe[1], event);
             saveLogs(fileLog, event);
+        }
+
+        // Aktualizacja stanu do TUI
+        condition_to_tui(tuiPipe[1], is_queen_alive, population, granary_volume, food, eggs, num_of_tun);
+
+
+        if (shutdown_started){
+            close_simulation(pgid, queenPid, tuiPid, processes);
+            if (ants_finished == true){
+                if(queen_finished == true){
+                    if (tui_finished == true){
+                        running = false;
+                        break;
+                    }
+                }
+            }
         }
     }
 
@@ -636,7 +642,7 @@ std::string messageFromAnt(char buffer[256], std::string& pending, ssize_t bytes
 
 
 
-std::string messageFromTui(char buffer[256],std::string& pending, ssize_t bytesRead, bool& running, pid_t queenPid, pid_t tuiPid){
+std::string messageFromTui(char buffer[256],std::string& pending, ssize_t bytesRead, pid_t queenPid,pid_t tuiPid, pid_t pgid){
     std::string events;
     
     pending.append(buffer, bytesRead);
@@ -652,9 +658,11 @@ std::string messageFromTui(char buffer[256],std::string& pending, ssize_t bytesR
         
         if (typeTui == "QUIT") {
             //zatrzymanie symulacji zapoczatkowane sygnalem sigusr2 do procesow potomnych ant_queen i tui
+            kill(-pgid, SIGUSR2); //sygnal zakonczenia pracy dla wszystkich procesow z grupy pgid (mrowki)
             if (kill(queenPid, SIGUSR2) == -1) { 
                 perror("kill SIGUSR2");
             }
+            shutdown_started = true;
         }
         else if (typeTui == "QUEEN_KILL") {
             //sigusr1 dla ant_queen oznacza zatrzymanie procesu ant_queen
@@ -777,5 +785,39 @@ void message_to_queen(int population, int granary_volume,
             "Blad wysylania danych do procesu queen",errno);
             break;
         }
+    }
+}
+
+
+void close_simulation(pid_t pgid, pid_t queenPid, pid_t tuiPid,std::vector<pid_t> processes ){
+    // Sprawdzanie mrówek
+    if (!ants_finished) {
+        bool all_finished = true;
+
+        for (size_t i = 0; i < processes.size(); i++) {
+            pid_t pid = processes[i];
+
+            pid_t result = waitpid(pid, nullptr, WNOHANG);
+
+            if (result == 0) {
+                all_finished = false;
+            }
+        }
+        ants_finished = all_finished;
+    }
+
+    // Sprawdzanie królowej
+    if (!queen_finished) {
+        pid_t result = waitpid(queenPid, nullptr, WNOHANG);
+
+        if (result == queenPid || (result == -1 && errno == ECHILD)) {
+            queen_finished = true;
+        }
+    }
+
+    // Gdy mrówki i królowa zakończyły pracę
+    if (ants_finished && queen_finished && !tui_finished) {
+        kill(tuiPid, SIGUSR2);
+        tui_finished = true;
     }
 }
